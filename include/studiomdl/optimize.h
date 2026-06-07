@@ -39,7 +39,7 @@ struct Vertex_t
 	unsigned char boneWeightIndex[MAX_NUM_BONES_PER_VERT];
 	unsigned char numBones;
 
-	unsigned short origMeshVertID;
+	unsigned int origMeshVertID;
 
 	// for sw skinned verts, these are indices into the global list of bones
 	// for hw skinned verts, these are hardware bone indices
@@ -104,9 +104,9 @@ struct StripGroupHeader_t
 
 	int numIndices;
 	int indexOffset;
-	inline unsigned short *pIndex( int i ) const 
-	{ 
-		return (unsigned short *)(((byte *)this) + indexOffset) + i; 
+	inline unsigned int *pIndex( int i ) const
+	{
+		return (unsigned int *)(((byte *)this) + indexOffset) + i;
 	};
 
 	int numStrips;
@@ -120,9 +120,9 @@ struct StripGroupHeader_t
 
 	int numTopologyIndices;
 	int topologyOffset;
-	inline unsigned short *pTopologyIndex( int i ) const 
-	{ 
-		return (unsigned short *)(((byte *)this) + topologyOffset) + i; 
+	inline unsigned int *pTopologyIndex( int i ) const
+	{
+		return (unsigned int *)(((byte *)this) + topologyOffset) + i;
 	};
 };
 

@@ -67,8 +67,8 @@ struct studiohdr_t;
 #define MAXSTUDIOVERTS		32768	// These numbers save memory in CCachedRenderData, but restrict usable model sizes on 360
 #define	MAXSTUDIOFLEXVERTS	4096	// 
 #else
-#define MAXSTUDIOTRIANGLES	65536	// TODO: tune this
-#define MAXSTUDIOVERTS		65536	// TODO: tune this
+#define MAXSTUDIOTRIANGLES	262144
+#define MAXSTUDIOVERTS		524288
 #define	MAXSTUDIOFLEXVERTS	10000	// max number of verts that can be flexed per mesh.  TODO: tune this
 #endif
 #define MAXSTUDIOSKINS		32		// total textures

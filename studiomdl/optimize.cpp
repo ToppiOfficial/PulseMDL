@@ -17,7 +17,6 @@
 
 //#define IGNORE_BONES
 
-#define NVTRISTRIP
 
 // This is the minimum number of regular subd patches a mesh needs to contain before we split it into 2 draw calls ( regular vs extraordinary )
 #define MINIMUM_REGULAR_PATCHES 300
@@ -33,7 +32,7 @@
 #include "studiomdl/hardwarevertexcache.h"
 #include "studiomdl/optimize.h"
 #include <malloc.h>
-#include <nvtristrip.h>
+#include "meshoptimizer.h"
 #include "studiomdl/filebuffer.h"
 #include "tier1/utlvector.h"
 #include "materialsystem/imaterial.h"
@@ -128,8 +127,8 @@ namespace OptimizedModel {
         CUtlVector<Vertex_t> verts;
         int numIndices;
         int numTopologyIndices;
-        unsigned short *pIndices;
-        unsigned short *pTopologyIndices;
+        unsigned int *pIndices;
+        unsigned int *pTopologyIndices;
 
         unsigned int flags;
         int numBones;
@@ -154,8 +153,8 @@ namespace OptimizedModel {
     typedef CUtlVector<Vertex_t> VertexList_t;
     typedef CUtlVector<Face_t> FaceList_t;
     typedef CUtlVector<SubD_Face_t> SubD_FaceList_t;
-    typedef CUtlVector<unsigned short> VertexIndexList_t;
-    typedef CUtlVector<unsigned short> IndexTopologyList_t;
+    typedef CUtlVector<unsigned int> VertexIndexList_t;
+    typedef CUtlVector<unsigned int> IndexTopologyList_t;
     typedef CUtlVector<Strip_t> StripList_t;
     typedef CUtlVector<bool> FaceProcessedList_t;
 
@@ -340,7 +339,7 @@ namespace OptimizedModel {
         // Actually does the stripification
         void Stripify(VertexIndexList_t const &sourceIndices, IndexTopologyList_t const &sourceTopologyIndices,
                       bool bIsHWSkinned, int *pNumIndices, int *pNumTopologyIndices,
-                      unsigned short **ppIndices, unsigned short **ppTopologyIndices, bool bQuadSubd);
+                      unsigned int **ppIndices, unsigned int **ppTopologyIndices, bool bQuadSubd);
 
         // Makes sure our vertices are using the correct bones
         void SanityCheckVertBones(VertexIndexList_t const &list, VertexList_t const &vertices);
@@ -785,8 +784,8 @@ namespace OptimizedModel {
     //-----------------------------------------------------------------------------
     void COptimizedModel::Stripify(VertexIndexList_t const &sourceIndices,
                                    IndexTopologyList_t const &sourceTopologyIndices, bool bIsHWSkinned,
-                                   int *pNumIndices, int *pNumTopologyIndices, unsigned short **ppIndices,
-                                   unsigned short **ppTopologyIndices, bool bQuadSubd) {
+                                   int *pNumIndices, int *pNumTopologyIndices, unsigned int **ppIndices,
+                                   unsigned int **ppTopologyIndices, bool bQuadSubd) {
         if (sourceIndices.Count() == 0) {
             *ppIndices = 0;
             *pNumIndices = 0;
@@ -802,32 +801,30 @@ namespace OptimizedModel {
         // Skip the tristripping phase if we're building in preview mode, rendering quads or not hardware skinning
         if (bQuadSubd || g_StudioMdlContext.buildPreview || !bIsHWSkinned || g_StudioMdlContext.preserveTriangleOrder) {
             *pNumIndices = sourceIndices.Count();
-            *ppIndices = new unsigned short[*pNumIndices];
-            memcpy(*ppIndices, sourceIndices.Base(), (*pNumIndices) * sizeof(unsigned short));
+            *ppIndices = new unsigned int[*pNumIndices];
+            memcpy(*ppIndices, sourceIndices.Base(), (*pNumIndices) * sizeof(unsigned int));
 
             // Quad lists have additional topology indexing information, copy it in
             if (bQuadSubd) {
                 *pNumTopologyIndices = sourceTopologyIndices.Count();
-                *ppTopologyIndices = new unsigned short[*pNumTopologyIndices];
+                *ppTopologyIndices = new unsigned int[*pNumTopologyIndices];
                 memcpy(*ppTopologyIndices, sourceTopologyIndices.Base(),
-                       (*pNumTopologyIndices) * sizeof(unsigned short));
+                       (*pNumTopologyIndices) * sizeof(unsigned int));
             }
 
             return;
         }
 
-#ifdef NVTRISTRIP
-        PrimitiveGroup *primGroups;
-        unsigned short numPrimGroups;
+        {
+            size_t indexCount = (size_t)sourceIndices.Count();
+            unsigned int vertex_count = 0;
+            for (size_t i = 0; i < indexCount; i++)
+                if (sourceIndices[i] >= vertex_count) vertex_count = sourceIndices[i] + 1;
 
-        // Be sure to call delete[] on the returned primGroups to avoid leaking memory
-        GenerateStrips(&sourceIndices[0], sourceIndices.Count(), &primGroups, &numPrimGroups);
-        Assert(numPrimGroups == 1);
-        *pNumIndices = primGroups->numIndices;
-        *ppIndices = new unsigned short[*pNumIndices];
-        memcpy(*ppIndices, primGroups->indices, sizeof(unsigned short) * *pNumIndices);
-        delete[] primGroups;
-#endif
+            *pNumIndices = (int)indexCount;
+            *ppIndices = new unsigned int[indexCount];
+            meshopt_optimizeVertexCache(*ppIndices, sourceIndices.Base(), indexCount, vertex_count);
+        }
     }
 
     //-----------------------------------------------------------------------------
@@ -849,11 +846,11 @@ namespace OptimizedModel {
         // then add the vertices of all the neighboring faces.
         face->touched = true;
 
-        indices.AddToTail((unsigned short) face->vertID[0]);
-        indices.AddToTail((unsigned short) face->vertID[1]);
-        indices.AddToTail((unsigned short) face->vertID[2]);
+        indices.AddToTail((unsigned int) face->vertID[0]);
+        indices.AddToTail((unsigned int) face->vertID[1]);
+        indices.AddToTail((unsigned int) face->vertID[2]);
         if (face->vertID[3] != -1)
-            indices.AddToTail((unsigned short) face->vertID[3]); // quad case
+            indices.AddToTail((unsigned int) face->vertID[3]); // quad case
 
         // Try to add our neighbors
         if (face->neighborID[0] != -1) {
@@ -1012,10 +1009,10 @@ namespace OptimizedModel {
                     bExtraFaces = true;
                 }
 
-                indices.AddToTail((unsigned short) face->vertID[0]);
-                indices.AddToTail((unsigned short) face->vertID[1]);
-                indices.AddToTail((unsigned short) face->vertID[2]);
-                indices.AddToTail((unsigned short) face->vertID[3]);
+                indices.AddToTail((unsigned int) face->vertID[0]);
+                indices.AddToTail((unsigned int) face->vertID[1]);
+                indices.AddToTail((unsigned int) face->vertID[2]);
+                indices.AddToTail((unsigned int) face->vertID[3]);
 
                 int j = 0;                                                                // Next, fill in topology indices...
 
@@ -1049,9 +1046,9 @@ namespace OptimizedModel {
                     }
                 }
             } else {
-                indices.AddToTail((unsigned short) face->vertID[0]);
-                indices.AddToTail((unsigned short) face->vertID[1]);
-                indices.AddToTail((unsigned short) face->vertID[2]);
+                indices.AddToTail((unsigned int) face->vertID[0]);
+                indices.AddToTail((unsigned int) face->vertID[1]);
+                indices.AddToTail((unsigned int) face->vertID[2]);
             }
         }
 
@@ -1265,7 +1262,7 @@ namespace OptimizedModel {
 
     // Use a hash table to accelerate ProcessStripGroup/PostProcessStripGroup (initialization is slow, so instantiate it once globally and clear it before use)
     struct StripVertLookup_t {
-        int origMeshVertID;
+        unsigned int origMeshVertID;
         int vertID;
     };
 
@@ -1274,7 +1271,7 @@ namespace OptimizedModel {
     }
 
     static unsigned int StripVertLookup_KeyFunc(const StripVertLookup_t &a) {
-        return HashInt(a.origMeshVertID);
+        return HashInt((int)a.origMeshVertID);
     }
 
     CUtlHash <StripVertLookup_t> g_StripGroupVertexLookup(65536, 0, 0, StripVertLookup_CompareFunc,
@@ -1841,7 +1838,7 @@ namespace OptimizedModel {
 
             for (int j = 0; j < pStrip->numIndices; j++) {
                 int newIndex = -1;
-                int index = pStrip->pIndices[j];
+                unsigned int index = pStrip->pIndices[j];
 
                 Vertex_t *pVert = &pStrip->verts[index];
 
@@ -2010,14 +2007,6 @@ namespace OptimizedModel {
     void COptimizedModel::SetupMeshProcessing(studiohdr_t *pHdr, int vertexCacheSize,
                                               bool usesFixedFunction, int maxBonesPerVert, int maxBonesPerFace,
                                               int maxBonesPerStrip, const char *fileName) {
-#ifdef NVTRISTRIP
-        // Tell nvtristrip all of its params
-        SetCacheSize(vertexCacheSize);
-        SetStitchStrips(true);
-        SetMinStripSize(0);
-        SetListsOnly(true);
-#endif // NVTRISTRIP
-
         if (!g_StudioMdlContext.quiet) {
             printf("---------------------\n");
             printf("Generating optimized mesh \"%s\":\n", fileName);
@@ -2649,8 +2638,8 @@ namespace OptimizedModel {
         stripGroup.flags = IsByte(pStripGroup->flags);
         int stripGroupFileOffset = m_StripGroupsOffset + stripGroupID * sizeof(StripGroupHeader_t);
         int vertsFileOffset = m_VertsOffset + vertID * sizeof(Vertex_t);
-        int indicesFileOffset = m_IndicesOffset + indexID * sizeof(unsigned short);
-        int topologyFileOffset = m_TopologyOffset + topologyID * sizeof(unsigned short);
+        int indicesFileOffset = m_IndicesOffset + indexID * sizeof(unsigned int);
+        int topologyFileOffset = m_TopologyOffset + topologyID * sizeof(unsigned int);
         int stripsFileOffset = m_StripsOffset + stripID * sizeof(StripHeader_t);
         stripGroup.vertOffset = vertsFileOffset - stripGroupFileOffset;
         stripGroup.indexOffset = indicesFileOffset - stripGroupFileOffset;
@@ -2676,13 +2665,10 @@ namespace OptimizedModel {
     }
 
     int COptimizedModel::WriteIndices(int indexID, StripGroup_t *pStripGroup) {
-        int indexFileOffset = m_IndicesOffset + indexID * sizeof(unsigned short);
+        int indexFileOffset = m_IndicesOffset + indexID * sizeof(unsigned int);
         int numIndices = pStripGroup->indices.Count();
-        m_FileBuffer->WriteAt(indexFileOffset, &pStripGroup->indices[0], sizeof(unsigned short) * numIndices,
+        m_FileBuffer->WriteAt(indexFileOffset, &pStripGroup->indices[0], sizeof(unsigned int) * numIndices,
                               "indices");
-#ifdef _DEBUG
-        //	unsigned short *debug = ( unsigned short * )m_FileBuffer->GetPointer( indexFileOffset );
-#endif
         return numIndices;
     }
 
@@ -2692,13 +2678,10 @@ namespace OptimizedModel {
         if (pStripGroup->topologyIndices.Count() == 0)
             return 0;
 
-        int topologyIndexFileOffset = m_TopologyOffset + topologyID * sizeof(unsigned short);
+        int topologyIndexFileOffset = m_TopologyOffset + topologyID * sizeof(unsigned int);
         int numTopologyIndices = pStripGroup->topologyIndices.Count();
         m_FileBuffer->WriteAt(topologyIndexFileOffset, &pStripGroup->topologyIndices[0],
-                              sizeof(unsigned short) * numTopologyIndices, "topologyIndices");
-#ifdef _DEBUG
-        //	unsigned short *debug = ( unsigned short * )m_FileBuffer->GetPointer( topologyIndexFileOffset );
-#endif
+                              sizeof(unsigned int) * numTopologyIndices, "topologyIndices");
         return numTopologyIndices;
     }
 
@@ -2879,7 +2862,7 @@ namespace OptimizedModel {
         m_StripsOffset = m_StripGroupsOffset + sizeof(StripGroupHeader_t) * stats.m_TotalStripGroups;
         m_VertsOffset = m_StripsOffset + sizeof(StripHeader_t) * stats.m_TotalStrips;
         m_IndicesOffset = m_VertsOffset + sizeof(Vertex_t) * stats.m_TotalVerts;
-        m_BoneStateChangesOffset = m_IndicesOffset + sizeof(unsigned short) * stats.m_TotalIndices;
+        m_BoneStateChangesOffset = m_IndicesOffset + sizeof(unsigned int) * stats.m_TotalIndices;
         m_StringTableOffset =
                 m_BoneStateChangesOffset + sizeof(BoneStateChangeHeader_t) * stats.m_TotalBoneStateChanges;
         m_MaterialReplacementsOffset = m_StringTableOffset + s_StringTable.CalcSize();
@@ -2887,7 +2870,7 @@ namespace OptimizedModel {
                 m_MaterialReplacementsOffset + stats.m_TotalMaterialReplacements * sizeof(MaterialReplacementHeader_t);
         m_TopologyOffset =
                 m_MaterialReplacementsListOffset + g_ScriptLODs.Count() * sizeof(MaterialReplacementListHeader_t);
-        m_EndOfFileOffset = m_TopologyOffset + sizeof(unsigned short) * stats.m_TotalTopologyIndices;
+        m_EndOfFileOffset = m_TopologyOffset + sizeof(unsigned int) * stats.m_TotalTopologyIndices;
 
         int curModel = 0;
         int curLOD = 0;

@@ -4561,7 +4561,7 @@ bool Clamp_VTX_LODS(const char *fileName, int rootLOD, studiohdr_t *pStudioHdr) 
 
                         pNewStripGroup->numIndices = pStripGroup->numIndices;
                         pNewStripGroup->indexOffset = (pData - (byte *) pNewStripGroup);
-                        size = pNewStripGroup->numIndices * sizeof(unsigned short);
+                        size = pNewStripGroup->numIndices * sizeof(unsigned int);
                         memcpy(pData, pStripGroup->pIndex(0), size);
                         pData += size;
 

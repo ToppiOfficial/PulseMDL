@@ -23,7 +23,7 @@ endif()
 add_compile_definitions(${PLATFORM_DEFINES} RAD_TELEMETRY_DISABLED _CRT_SECURE_NO_WARNINGS USE_MEM_DEBUG=0 _DLL_EXT=.dll)
 
 add_subdirectory(libs/appframework)
-add_subdirectory(libs/nvtristriplib)
+add_subdirectory(libs/meshoptimizer)
 add_subdirectory(libs/tier0)
 add_subdirectory(libs/tier1)
 add_subdirectory(libs/tier2)
@@ -80,7 +80,7 @@ target_link_libraries(studiomdl_v2 PRIVATE
         dmeutils
         meshutils
         appframework
-        nvtristriplib
+        meshoptimizer
         shlwapi
         filesystem_stdio_v2_static
         )
