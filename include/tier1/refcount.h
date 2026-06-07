@@ -168,7 +168,7 @@ public:
 //			code bloat.
 //-----------------------------------------------------------------------------
 
-template <const bool bSelfDelete, typename CRefThreading = CRefMT>
+template <const bool bSelfDelete, typename CRefThreading = CRefST>
 class NO_VTABLE CRefCountServiceBase
 {
 protected:
@@ -217,7 +217,7 @@ protected:
 	static int DoRelease() { return 1; }
 };
 
-template <typename CRefThreading = CRefMT>
+template <typename CRefThreading = CRefST>
 class NO_VTABLE CRefCountServiceDestruct
 {
 protected:

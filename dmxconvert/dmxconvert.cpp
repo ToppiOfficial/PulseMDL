@@ -57,7 +57,6 @@ bool CDmxConvertApp::PreInit( )
 {
 	CreateInterfaceFn factory = GetFactory();
 	ConnectTier1Libraries( &factory, 1 );
-	ConnectTier2Libraries( &factory, 1 );
 
 	if ( !g_pFullFileSystem || !g_pDataModel )
 	{
