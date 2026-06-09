@@ -970,7 +970,7 @@ void Option_Eyeball(s_model_t *pmodel) {
 
     // pupil scale
     GetToken(false);
-    eyeball->iris_scale = 1.0 / verify_atof(token);
+    eyeball->iris_scale = 1.0 / (verify_atof(token) * g_currentscale);
 
     VectorCopy(tmp, eyeball->org);
 
