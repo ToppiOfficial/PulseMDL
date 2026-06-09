@@ -95,4 +95,13 @@ extern IScriptLib *g_pScriptLib;
 const char* LookupVariableValue(const char* name);
 bool IsVariableDefined(const char* name);
 
+// Define a variable directly without going through the script tokenizer.
+// If the variable already exists its value is overwritten.
+void DefineVariableDirect(const char* name, const char* value);
+
+// Register a fallback directory searched (in registration order) when a
+// $include path cannot be found at its primary location.
+// dir may be absolute or relative to the QC file's directory.
+void AddIncludeDir(const char* dir);
+
 #endif // SCRIPLIB_H

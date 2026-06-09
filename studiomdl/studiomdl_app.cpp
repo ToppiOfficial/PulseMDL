@@ -662,6 +662,8 @@ void UsageAndExit() {
              "[-maxwarnings]\n"
              "[-preview]\n"
              "[-dumpmaterials]\n"
+             "[-definevariable <variable> <value>] (repeatable)\n"
+             "[-includedir <dir>] (repeatable, fallback search path for $include)\n"
              "[-basedir]\n"
              "[-tempcontent]\n"
              "[-nop4]\n"
@@ -1080,6 +1082,26 @@ bool CStudioMDLApp::ParseArguments() {
 
         if (!Q_stricmp(pArgv, "-dumpmaterials")) {
             g_StudioMdlContext.dumpMaterials = true;
+            continue;
+        }
+
+        if (!Q_stricmp(pArgv, "-definevariable")) {
+            if (i + 2 >= argc) {
+                MdlError("-definevariable requires two arguments: <variable> <value>\n");
+                return false;
+            }
+            const char *pVar   = CommandLine()->GetParm(++i);
+            const char *pValue = CommandLine()->GetParm(++i);
+            DefineVariableDirect(pVar, pValue);
+            continue;
+        }
+
+        if (!Q_stricmp(pArgv, "-includedir")) {
+            if (i + 1 >= argc) {
+                MdlError("-includedir requires one argument: <dir>\n");
+                return false;
+            }
+            AddIncludeDir(CommandLine()->GetParm(++i));
             continue;
         }
 

@@ -59,6 +59,8 @@ typedef struct
 
 CUtlVector<variable_t> g_definevariable;
 
+CUtlVector<CUtlString> g_includeDirs;
+
 /*
 Callback stuff
 */
@@ -261,6 +263,29 @@ void RedefineVariable( char *variablename )
 	}
 }
 
+
+void DefineVariableDirect(const char* name, const char* value) {
+    for (int i = 0; i < g_definevariable.Count(); i++) {
+        if (!Q_strcmp(g_definevariable[i].param, name)) {
+            free(g_definevariable[i].param);
+            free(g_definevariable[i].value);
+            free(g_definevariable[i].param_lcase);
+            g_definevariable[i].param       = strdup(name);
+            g_definevariable[i].value       = strdup(value);
+            g_definevariable[i].param_lcase = strlwr(strdup(name));
+            return;
+        }
+    }
+    variable_t v;
+    v.param       = strdup(name);
+    v.value       = strdup(value);
+    v.param_lcase = strlwr(strdup(name));
+    g_definevariable.AddToTail(v);
+}
+
+void AddIncludeDir(const char* dir) {
+    g_includeDirs.AddToTail(dir);
+}
 
 const char* LookupVariableValue(const char* name) {
     for (int i = 0; i < g_definevariable.Count(); i++) {
@@ -1020,43 +1045,77 @@ qboolean EndOfScript (qboolean crossline)
 
 void AttemptConditionalInclude( void )
 {
-	// Look for additional $include parameters, and only perform the include if the condition succeeds.
-	// Right now, there's only a check for a file existing. This is a hacky way to get some logical
-	// processing into qc, short of giving it full language-like arbitrary expression evaluation.
-
 	GetToken (false);
 
 	char szSavedPath[MAX_PATH];
 	V_strcpy( szSavedPath, token );
 
-	// check for a conditional flag
-	
-	bool bConditionSuccess = true;
+	// parse optional flags on the same line (any order, combinable)
+	bool bIfFileExist   = false; // silently skip if file not found anywhere
+	bool bNoFallbackDir = false; // ignore -includedir fallback dirs
 
-	if ( TokenAvailable() )
+	while ( TokenAvailable() )
 	{
 		GetToken (false);
-		if ( !stricmp (token, "iffileexists") )
+		if ( !stricmp(token, "iffileexist") || !stricmp(token, "iffileexists") )
 		{
-			bConditionSuccess = false;
-
-			if ( TokenAvailable() )
-			{
-				GetToken (false);
-				bConditionSuccess = g_pFullFileSystem->FileExists( token ) != 0;
-			}
-
-			printf("Condition 'iffileexists' for input '%s' is %s.\n", token, bConditionSuccess ? "True" : "False" );			
+			bIfFileExist = true;
+		}
+		else if ( !stricmp(token, "nofallbackdir") )
+		{
+			bNoFallbackDir = true;
 		}
 		else
 		{
-			Error ("Unknown $include parameter %s\n",token);
+			Error ("Unknown $include parameter %s\n", token);
 		}
 	}
 
-	printf("%s: %s\n", bConditionSuccess ? "Including" : "SKIPPING", szSavedPath );
-	if ( bConditionSuccess )
-		AddScriptToStack( szSavedPath );
+	// check primary location
+	{
+		char szPrimBuf[MAX_PATH];
+		V_strncpy(szPrimBuf, szSavedPath, sizeof(szPrimBuf));
+		const char* szExpanded = ExpandPath(szPrimBuf);
+		FILE* fp = fopen(szExpanded, "r");
+		if (fp)
+		{
+			fclose(fp);
+			printf("Including: %s\n", szSavedPath);
+			AddScriptToStack(szSavedPath);
+			return;
+		}
+	}
+
+	// try fallback include dirs in registration order (unless nofallbackdir)
+	if ( !bNoFallbackDir )
+	{
+		for (int nDir = 0; nDir < g_includeDirs.Count(); nDir++)
+		{
+			char szCandidate[MAX_PATH];
+			V_snprintf(szCandidate, sizeof(szCandidate), "%s/%s", g_includeDirs[nDir].String(), szSavedPath);
+			Q_FixSlashes(szCandidate);
+			const char* szExpanded = ExpandPath(szCandidate);
+			FILE* fc = fopen(szExpanded, "r");
+			if (fc)
+			{
+				fclose(fc);
+				printf("Including: %s (from fallback dir: %s)\n", szSavedPath, g_includeDirs[nDir].String());
+				AddScriptToStack(szCandidate);
+				return;
+			}
+		}
+	}
+
+	// file not found anywhere
+	if ( bIfFileExist )
+	{
+		printf("SKIPPING (not found): %s\n", szSavedPath);
+		return;
+	}
+
+	// preserve original behavior - AddScriptToStack will error on missing file
+	printf("Including: %s\n", szSavedPath);
+	AddScriptToStack(szSavedPath);
 }
 
 /*
@@ -1148,13 +1207,18 @@ skipspace:
 
 	if (*script->script_p == '"')
 	{
-		// quoted token
+		// quoted token - variable expansion applies inside quotes
 		script->script_p++;
 		while (*script->script_p != '"')
 		{
-			*token_p++ = *script->script_p++;
 			if (script->script_p == script->end_p)
 				break;
+			if (!ExpandVariableToken(token_p))
+			{
+				*token_p++ = *script->script_p++;
+				if (script->script_p == script->end_p)
+					break;
+			}
 			if (token_p == &token[MAXTOKEN])
 				Error ("Token too large on line %i\n",scriptline);
 		}

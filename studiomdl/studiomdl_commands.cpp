@@ -8043,6 +8043,29 @@ void Cmd_DeltaProportions() {
     Msg("Delta Proportions: registered 'a_reference' and 'a_proportions'\n");
 }
 
+//-----------------------------------------------------------------------------
+// Prints a message to the console during compile.
+//-----------------------------------------------------------------------------
+void Cmd_Print() {
+    if (TokenAvailable()) {
+        GetToken(false);
+        Msg("Print: %s\n", token);
+    }
+}
+
+//-----------------------------------------------------------------------------
+// Stops the compile immediately with an optional message.
+//-----------------------------------------------------------------------------
+void Cmd_Return() {
+    if (TokenAvailable()) {
+        GetToken(false);
+        Msg("$return: %s\n", token);
+    } else {
+        Msg("$return: stopping compile.\n");
+    }
+    exit(0);
+}
+
 //
 // This is the master list of the commands a QC file supports.
 // To add a new command to the QC files, add it here.
@@ -8175,6 +8198,8 @@ MDLCommand_t g_Commands[] =
                 {"$case",                             Cmd_Case,},
                 {"$default",                          Cmd_Default,},
                 {"$deltaproportions",                 Cmd_DeltaProportions,},
+                {"$return",                           Cmd_Return,},
+                {"$print",                            Cmd_Print,},
         };
 
 int g_nMDLCommandCount = ARRAYSIZE(g_Commands);

@@ -23,16 +23,23 @@ A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](
   - Texture limit 32 -> 64 (Still recommend to stay below 32 for all engine branch aside from Source Film Maker)
 - Replaced nvstrip with meshoptimizer
 - Minor code changes for faster compile
+- `$definevariable` now work inside quotation but `$definemacro` does not.
+- Multiple engine branch support but requires additional launch parameter `-newvtx` for Alien Swarm to CS:GO Engine Branch. (The minium is likely Team Fortress 2 or SourceSDK2013)
+- variables can now be defined outside of qc through `-definevariable <var name> <value>` launch parameter. (can be repeated)
+- `$include` now has a fallback directory if it is not found on the specified path using the new launch parameter `-includedir <dir>`. (can be repeated)
+- Can compile for DirectX8 and can be opted out with `-nodx80` similar to StudioMDL++
 - `$addsearchdir` now works correctly for SMD/DMX source file lookup
 - New `ignorescale` parameter for `$animation` and `$sequence`
 - New `$driverbone` and `driverlookat` to create procedural bone without the need for VRD files
 - New `$rendermesh` for DMX models containing multiple DMEMesh elements
 - New `$if $elif $else` and `$switch` conditional commands.
-- New `$staticproppose <animation_file> <frame>` to bake a custom pose into the geometry skeleton to a single `static_prop`. Cannot be used together with `$staticprop`. (Doesn't work as expected!)
+- New `$staticproppose <animation_file> <frame>` to bake a custom pose into the geometry skeleton to a single `static_prop`. Cannot be used together with `$staticprop`. (Doesn't work as expected!) (WORK-IN-PROGRESS)
+- New `$return <optional message>` and `$print <message>`.  `$return` stops the compile with optional message similar to `$qcassert`.
 - New `$deltaproportions` to generate the `a_reference` and `a_proportions`. See `docs/deltaproportions.txt`.
-- Multiple engine branch support but requires additional launch parameter `-newvtx` for Alien Swarm to CS:GO Engine Branch.
-- Can compile for DirectX8 and can be opted out with `-nodx80` similar to StudioMDL++
-- Recreated some features from StudioMDL++ and NekoMDL
+- New `$include` optional inline parameters:
+  - `iffileexist` checks if file exist, if it doesn't then silently pass and ingore.  Does not stop the compile.
+  - `nofallbackdir` doesn't use `-includedir` fallback
+- Recreated some features from StudioMDL++ and NekoMDL:
   - `-cullanims` flag to strip unreferenced `$animation` blocks
   - Bone weight cull threshold reduced from 5% to 0.01%
   - `$scale` now affects eyeball, eyelid, dmxeyelid, forceboneposrot, procedural bones, and VTA flex deltas
