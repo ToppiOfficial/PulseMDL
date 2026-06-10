@@ -829,6 +829,9 @@ namespace OptimizedModel {
     // Eat up face recursively by flood-filling around the model until
     // we run out of bones on the hardware.
     //-----------------------------------------------------------------------------
+	/*  
+    *  Toppi: This can crash on high-poly meshes due to deep recursion, so it's been replaced with an iterative version below.
+    * 
     void COptimizedModel::BuildStripsRecursive(VertexIndexList_t &indices, FaceList_t &faceList, Face_t *face) {
         Assert(face);
 
@@ -862,6 +865,42 @@ namespace OptimizedModel {
         }
         if (face->neighborID[3] != -1) {
             BuildStripsRecursive(indices, faceList, &faceList[face->neighborID[3]]);
+        }
+    }
+    */
+
+    //-----------------------------------------------------------------------------
+    // Eat up faces iteratively by flood-filling around the model until
+    // we run out of bones on the hardware.
+    // Uses an explicit heap-allocated stack instead of recursion to avoid
+    // call stack overflow on high-poly meshes.
+    //-----------------------------------------------------------------------------
+    void COptimizedModel::BuildStripsRecursive(VertexIndexList_t& indices, FaceList_t& faceList, Face_t* face)
+    {
+        CUtlVector<Face_t*> stack;
+        stack.EnsureCapacity(faceList.Count());
+        stack.AddToTail(face);
+
+        while (stack.Count() > 0)
+        {
+            Face_t* pFace = stack.Tail();
+            stack.RemoveMultipleFromTail(1);
+
+            if (pFace->touched) continue;
+            if (ComputeNewBonesNeeded(*pFace)) continue;
+
+            pFace->touched = true;
+
+            indices.AddToTail((unsigned short)pFace->vertID[0]);
+            indices.AddToTail((unsigned short)pFace->vertID[1]);
+            indices.AddToTail((unsigned short)pFace->vertID[2]);
+            if (pFace->vertID[3] != -1)
+                indices.AddToTail((unsigned short)pFace->vertID[3]);
+
+            if (pFace->neighborID[0] != -1) stack.AddToTail(&faceList[pFace->neighborID[0]]);
+            if (pFace->neighborID[1] != -1) stack.AddToTail(&faceList[pFace->neighborID[1]]);
+            if (pFace->neighborID[2] != -1) stack.AddToTail(&faceList[pFace->neighborID[2]]);
+            if (pFace->neighborID[3] != -1) stack.AddToTail(&faceList[pFace->neighborID[3]]);
         }
     }
 
@@ -2326,19 +2365,20 @@ namespace OptimizedModel {
 
     bool COptimizedModel::MeshNeedsRemoval(studiohdr_t *pHdr, mstudiomesh_t *pStudioMesh,
                                            LodScriptData_t &scriptLOD) {
+        if (scriptLOD.meshRemovals.IsEmpty())
+            return false;
+        int nTextureID = MaterialToTexture(pStudioMesh->material);
+        if (nTextureID < 0)
+            return false;
+        char baseMeshName[MAX_PATH];
+        Q_FileBase(g_texture[nTextureID].name, baseMeshName, sizeof(baseMeshName));
+        char baseRemovalName[MAX_PATH];
+        for (int i = 0; i < scriptLOD.meshRemovals.Count(); i++) {
+            Q_FileBase(scriptLOD.meshRemovals[i].GetSrcName(), baseRemovalName, sizeof(baseRemovalName));
+            if (!stricmp(baseMeshName, baseRemovalName))
+                return true;
+        }
         return false;
-//        mstudiotexture_t *ptexture;
-//        short *pskinref = pHdr->pSkinref(0);
-//        ptexture = pHdr->pTexture(pskinref[pStudioMesh->material]);
-//        const char *meshName = ptexture->material->GetName();
-//        int i;
-//        for (i = 0; i < scriptLOD.meshRemovals.Count(); i++) {
-//            const char *meshRemovalName = scriptLOD.meshRemovals[i].GetSrcName();
-//            if (ComparePath(meshName, meshRemovalName)) {
-//                return true;
-//            }
-//        }
-//        return false;
     }
 
 

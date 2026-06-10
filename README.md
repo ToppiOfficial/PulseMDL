@@ -15,14 +15,29 @@ A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](
 
 `DMX model 18` but lower version can maybe still work
 
+## TODO
+
+- Remove the dependency for vphysics.dll (but still able to compile collisionjoints and collisionmodel) and dmxconvert.exe
+- Explore the issue stated by REDxEYE about mesh split corrupting flex vertices.
+- Further clean and remove "unused/dead code"
+- Improve the loading and fix some crashes when dealing with large SMD model
+
 ## Features
 
 - 64 Bit
-- Increase some compile limit
-  - Bone limit 256 -> 1024 (Will warn if the model is above 256 as most engine branch are either 128 or 256)
-  - Texture limit 32 -> 64 (Still recommend to stay below 32 for all engine branch aside from Source Film Maker)
+- Increased some limit
+  - Bone limit 256 -> 1024
+  - Texture limit 32 -> 64
+  - Flex vertices limit 10000 -> 32768
+  - Mesh vertices limit 21845 -> 174762 (Overall model mesh limit: 65536 -> 524288)
 - Replaced nvstrip with meshoptimizer
 - Minor code changes for faster compile
+- Change bone collapsing optimization behavior, Bone will not collapse if it is within this criteria:
+  - If bone is Jigglebone
+  - If bone is procedural bone/ driver bone
+  - If bone is $definebone
+  - If bone is $bonemerge
+  - If bone is BoneFlexDriver
 - `$definevariable` now work inside quotation but `$definemacro` does not.
 - Multiple engine branch support but requires additional launch parameter `-newvtx` for Alien Swarm to CS:GO Engine Branch. (The minium is likely Team Fortress 2 or SourceSDK2013)
 - variables can now be defined outside of qc through `-definevariable <var name> <value>` launch parameter. (can be repeated)

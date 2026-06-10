@@ -1,4 +1,4 @@
-//====== Copyright © 1996-2004, Valve Corporation, All rights reserved. =======
+//====== Copyright ï¿½ 1996-2004, Valve Corporation, All rights reserved. =======
 //
 // Operators that generate combinations
 //
@@ -69,6 +69,10 @@ public:
 	bool IsEyelid() const;
 	void SetEyelid( bool bEyelid );
 
+	// Flex controller group (maps to s_flexcontroller_t::type). Empty means use control name.
+	const char *GetFlexGroup() const;
+	void SetFlexGroup( const char *pFlexGroup );
+
 	// Returns the name of the eyeball
 	const char *GetEyesUpDownFlexName() const;
 
@@ -86,6 +90,7 @@ private:
 	CDmaStringArray m_RawControlNames;
 	CDmaVar<bool> m_bIsStereo;
 	CDmaVar< bool > m_bIsEyelid;
+	CDmaString m_FlexGroup;
 
 	// FIXME! Remove soon! Used to autogenerate wrinkle deltas
 	CDmaArray< float > m_WrinkleScales;
@@ -229,6 +234,7 @@ public:
 	void SetEyelidControl( ControlIndex_t nControlIndex, bool bIsEyelid );
 	bool IsEyelidControl( ControlIndex_t nControlIndex ) const;
 	const char *GetEyesUpDownFlexName( ControlIndex_t nControlIndex ) const;
+	const char *GetControlFlexGroup( ControlIndex_t nControlIndex ) const;
 
 	// Sets the value of a control
 	float GetControlValue( ControlIndex_t nControlIndex, CombinationControlType_t type = COMBO_CONTROL_NORMAL ) const;

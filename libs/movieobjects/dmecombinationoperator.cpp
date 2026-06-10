@@ -34,6 +34,7 @@ void CDmeCombinationInputControl::OnConstruction()
 	m_RawControlNames.Init( this, "rawControlNames" );
 	m_bIsStereo.Init( this, "stereo" );
 	m_bIsEyelid.InitAndSet( this, "eyelid", false );
+	m_FlexGroup.Init( this, "flexgroup" );
 	m_WrinkleScales.Init( this, "wrinkleScales" );
 }
 
@@ -162,6 +163,20 @@ bool CDmeCombinationInputControl::IsEyelid() const
 void CDmeCombinationInputControl::SetEyelid( bool bEyelid )
 {
 	m_bIsEyelid = bEyelid;
+}
+
+
+//-----------------------------------------------------------------------------
+// Flex controller group name
+//-----------------------------------------------------------------------------
+const char *CDmeCombinationInputControl::GetFlexGroup() const
+{
+	return m_FlexGroup.Get();
+}
+
+void CDmeCombinationInputControl::SetFlexGroup( const char *pFlexGroup )
+{
+	m_FlexGroup = pFlexGroup ? pFlexGroup : "";
 }
 
 
@@ -904,6 +919,15 @@ bool CDmeCombinationOperator::IsEyelidRawControl( int nIndex ) const
 const char *CDmeCombinationOperator::GetEyesUpDownFlexName( ControlIndex_t nControlIndex ) const
 {
 	return m_InputControls[ nControlIndex ]->GetEyesUpDownFlexName();
+}
+
+
+//-----------------------------------------------------------------------------
+//
+//-----------------------------------------------------------------------------
+const char *CDmeCombinationOperator::GetControlFlexGroup( ControlIndex_t nControlIndex ) const
+{
+	return m_InputControls[ nControlIndex ]->GetFlexGroup();
 }
 
 

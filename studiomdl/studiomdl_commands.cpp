@@ -156,6 +156,9 @@ void ProcessOptionStudio(s_model_t *pmodel, const char *pFullPath, float flScale
     // If the name matches a $rendermesh definition, resolve it to the underlying DMX file.
     const s_rendermesh_def_t *pRenderMeshDef = FindRenderMeshDef(pFullPath);
     Q_strncpy(pmodel->filename, pRenderMeshDef ? pRenderMeshDef->filename : pFullPath, sizeof(pmodel->filename));
+    if (pRenderMeshDef) {
+        Q_strncpy(pmodel->rendermesh_name, pFullPath, sizeof(pmodel->rendermesh_name));
+    }
 
     if (flScale != 0.0f) {
         pmodel->scale = g_currentscale = flScale;
@@ -763,7 +766,7 @@ void AddFlexControllers(
             r2i[i] = g_numflexcontrollers;
             pController = &g_flexcontroller[g_numflexcontrollers++];
             Q_strncpy(pController->name, pTemp, sizeof(pController->name));
-            Q_strncpy(pController->type, pTemp, sizeof(pController->type));
+            Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? pTemp : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
 
             if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
                 remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
@@ -782,7 +785,7 @@ void AddFlexControllers(
             l2i[i] = g_numflexcontrollers;
             pController = &g_flexcontroller[g_numflexcontrollers++];
             Q_strncpy(pController->name, pTemp, sizeof(pController->name));
-            Q_strncpy(pController->type, pTemp, sizeof(pController->type));
+            Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? pTemp : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
 
             if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
                 remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
@@ -803,7 +806,7 @@ void AddFlexControllers(
             l2i[i] = g_numflexcontrollers;
             s_flexcontroller_t *pController = &g_flexcontroller[g_numflexcontrollers++];
             Q_strncpy(pController->name, remapControl.m_Name.Get(), sizeof(pController->name));
-            Q_strncpy(pController->type, remapControl.m_Name.Get(), sizeof(pController->type));
+            Q_strncpy(pController->type, remapControl.m_FlexGroup.IsEmpty() ? remapControl.m_Name.Get() : remapControl.m_FlexGroup.Get(), sizeof(pController->type));
 
             if (remapControl.m_RemapType == FLEXCONTROLLER_REMAP_2WAY ||
                 remapControl.m_RemapType == FLEXCONTROLLER_REMAP_EYELID) {
@@ -3211,9 +3214,38 @@ static void Cmd_ReplaceModel(LodScriptData_t &lodData) {
         *pDot = 0;
     }
 
-    if (!FindCachedSource(token, "")) {
-        // must have prior knowledge of the from
-        TokenError("Unknown replace model '%s'\n", token);
+    // If the token is a $rendermesh alias, resolve it to the underlying DMX filename for the
+    // cache lookup, but keep the alias as the src name so GetLODSources can match it.
+    const s_rendermesh_def_t *pRmDef = FindRenderMeshDef(token);
+    if (pRmDef) {
+        char szResolved[MAX_PATH];
+        Q_strncpy(szResolved, pRmDef->filename, sizeof(szResolved));
+        char *pDot2 = strrchr(szResolved, '.');
+        if (pDot2) *pDot2 = 0;
+        if (!FindCachedSource(szResolved, "")) {
+            TokenError("Unknown replace model '%s' (resolved from $rendermesh to '%s')\n", token, szResolved);
+        }
+    } else if (!FindCachedSource(token, "")) {
+        // Fallback: search by basename for sources loaded under a $pushd context that
+        // has since been popped. GetModelLODSource strips paths for comparison, so
+        // the bare name in replacemodel will match correctly at build time.
+        bool bFoundByBasename = false;
+        for (int si = 0; si < g_numsources && !bFoundByBasename; si++) {
+            if (!g_source[si]) continue;
+            const char *pBase = strrchr(g_source[si]->filename, '/');
+            const char *pBase2 = strrchr(g_source[si]->filename, '\\');
+            if (pBase2 > pBase) pBase = pBase2;
+            pBase = pBase ? pBase + 1 : g_source[si]->filename;
+            char szBuf[MAX_PATH];
+            Q_strncpy(szBuf, pBase, sizeof(szBuf));
+            char *pDot2 = strrchr(szBuf, '.');
+            if (pDot2) *pDot2 = 0;
+            if (!Q_stricmp(szBuf, token))
+                bFoundByBasename = true;
+        }
+        if (!bFoundByBasename) {
+            TokenError("Unknown replace model '%s'\n", token);
+        }
     }
 
     newReplacement.SetSrcName(token);
@@ -3241,7 +3273,30 @@ static void Cmd_ReplaceModel(LodScriptData_t &lodData) {
 
     // Load the source right here baby! That way its bones will get converted
     if (!lodData.IsStrippedFromModel()) {
-        newReplacement.m_pSource = Load_Source(newReplacement.GetDstName(), "smd", reverse, false);
+        const s_rendermesh_def_t *pDstRmDef = FindRenderMeshDef(newReplacement.GetDstName());
+        if (pDstRmDef) {
+            s_source_t *pSrc = Load_Source(pDstRmDef->filename, "", reverse, false);
+            if (pSrc) {
+                s_source_t *pClone = CloneSourceGeometry(pSrc);
+                ApplyRenderMeshFilter(pClone, pDstRmDef);
+                newReplacement.m_pSource = pClone;
+            }
+        } else {
+            newReplacement.m_pSource = Load_Source(newReplacement.GetDstName(), "", reverse, false);
+        }
+
+        // replacemodel now requires a fully rigged mesh - weight transfer has been removed.
+        // For static props there are no bone weights, so skip the check.
+        if (newReplacement.m_pSource && !g_staticprop) {
+            const s_source_t *pCheck = newReplacement.m_pSource;
+            for (int v = 0; v < pCheck->m_GlobalVertices.Count(); v++) {
+                if (pCheck->m_GlobalVertices[v].boneweight.numbones <= 0) {
+                    MdlError("replacemodel \"%s\": vertex %d has no bone weights. "
+                             "LOD meshes must be fully rigged (weight transfer has been removed).\n",
+                             newReplacement.GetDstName(), v);
+                }
+            }
+        }
     } else if (!g_StudioMdlContext.quiet) {
         printf("Stripped lod \"%s\" @ %.1f\n", newReplacement.GetDstName(), lodData.switchValue);
     }
@@ -3341,6 +3396,38 @@ static void Cmd_RemoveMesh(LodScriptData_t &lodData) {
     newReplacement.SetSrcName(token);
 }
 
+//-----------------------------------------------------------------------------
+// Parse generatelod command - auto-decimates the named model via meshoptimizer
+//-----------------------------------------------------------------------------
+
+static void Cmd_GenerateLod(LodScriptData_t &lodData) {
+    int i = lodData.generateLods.AddToTail();
+    CLodScriptReplacement_t &newEntry = lodData.generateLods[i];
+
+    // model name (matches body-part model, same convention as replacemodel src)
+    GetToken(false);
+    char *pDot = strrchr(token, '.');
+    if (pDot) *pDot = 0;
+    newEntry.SetSrcName(token);
+
+    // decimation factor: 1.0 = full detail, 0.5 = 50% triangles
+    if (!TokenAvailable()) {
+        MdlError("generatelod: expected decimation factor after model name (%d) : %s\n",
+                 g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+    }
+    GetToken(false);
+    float factor = verify_atof(token);
+    if (factor <= 0.0f || factor > 1.0f) {
+        MdlError("generatelod: decimation factor must be in range (0, 1.0] (%d) : %s\n",
+                 g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+    }
+    newEntry.m_flDecimationFactor = factor;
+
+    if (lodData.IsStrippedFromModel() && !g_StudioMdlContext.quiet) {
+        printf("Stripped generatelod \"%s\" @ %.1f\n", newEntry.GetSrcName(), lodData.switchValue);
+    }
+}
+
 void Cmd_LOD(const char *cmdname) {
     if (gflags & STUDIOHDR_FLAGS_HASSHADOWLOD) {
         MdlError("Model can only have one $shadowlod and it must be the last lod in the " SRC_FILE_EXT " (%d) : %s\n",
@@ -3393,6 +3480,8 @@ void Cmd_LOD(const char *cmdname) {
         GetToken(true);
         if (stricmp("replacemodel", token) == 0) {
             Cmd_ReplaceModel(newLOD);
+        } else if (stricmp("generatelod", token) == 0) {
+            Cmd_GenerateLod(newLOD);
         } else if (stricmp("removemodel", token) == 0) {
             Cmd_RemoveModel(newLOD);
         } else if (stricmp("replacebone", token) == 0) {
@@ -7023,6 +7112,9 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
         memcpy(pClone->face, pOrig->face, pOrig->numfaces * sizeof(s_face_t));
 
     // Re-init tracking vectors with independent copies so filters don't interfere.
+    // m_GlobalVertices is zeroed here (abandoning the shared ref without freeing pOrig's buffer);
+    // ApplyDmeMeshFilter will rebuild it from the compacted vertex set.
+    memset(&pClone->m_GlobalVertices, 0, sizeof(pClone->m_GlobalVertices));
     memset(&pClone->m_FaceDmeMeshIdx, 0, sizeof(pClone->m_FaceDmeMeshIdx));
     pClone->m_FaceDmeMeshIdx.AddVectorToTail(pOrig->m_FaceDmeMeshIdx);
     memset(&pClone->m_DmeMeshNames, 0, sizeof(pClone->m_DmeMeshNames));
@@ -7171,6 +7263,11 @@ static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString>
 
     pSource->m_FaceDmeMeshIdx.RemoveAll();
     pSource->m_FaceDmeMeshIdx.AddVectorToTail(newFaceDmeMeshIdx);
+
+    // Rebuild m_GlobalVertices to match the compacted vertex[] layout so that
+    // UnifyLODs index math (vertexoffset + i -> m_GlobalVertices[i]) is correct.
+    pSource->m_GlobalVertices.RemoveAll();
+    pSource->m_GlobalVertices.AddVectorToTail(newVerts);
 
     // Remap new-style vertex animation indices
     for (int animIdx = 0; animIdx < pSource->m_Animations.Count(); animIdx++) {
@@ -7829,6 +7926,11 @@ void Cmd_DeltaProportions() {
     if (!refPath[0])
         TokenError("$deltaproportions: 'referencepose' is required\n");
 
+    // snapshot material/texture state - these sources are skeleton-only,
+    // any mesh materials they register must not end up in the final mdl
+    const int savedNumTextures  = g_numtextures;
+    const int savedNumMaterials = g_nummaterials;
+
     // load reference source
     s_source_t *pRef = Load_Source(refPath, "");
     if (!pRef || !pRef->numbones || !pRef->m_Animations.Count())
@@ -7863,6 +7965,16 @@ void Cmd_DeltaProportions() {
         if (!pProp)
             MdlError("$deltaproportions: 'proportionpose' omitted but no $body/$model loaded yet\n");
     }
+
+    // roll back any textures/materials the skeleton-only loads registered
+    for (int i = 0; i < g_numtextures; i++) {
+        if (g_texture[i].material >= savedNumMaterials)
+            g_texture[i].material = -1;
+    }
+    for (int i = savedNumTextures; i < g_numtextures; i++)
+        g_texture[i].name[0] = '\0';
+    g_numtextures  = savedNumTextures;
+    g_nummaterials = savedNumMaterials;
 
     int nBones = pRef->numbones;
 

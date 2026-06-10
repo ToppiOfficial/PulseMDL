@@ -332,7 +332,8 @@ void CreateMakefile_OutputMakefile() {
     fclose(fp);
 }
 
-void ClampMaxVerticesPerModel(s_source_t *pOrigSource) {
+void ClampMaxVerticesPerModel(s_model_t *pOrigModel) {
+    s_source_t *pOrigSource = pOrigModel->source;
     // check for overage
     if (pOrigSource->numvertices < g_StudioMdlContext.maxVertexLimit)
         return;
@@ -380,10 +381,26 @@ void ClampMaxVerticesPerModel(s_source_t *pOrigSource) {
         newSource[n].m_nummeshes = pOrigSource->nummeshes;
     }
 
+    // Save mesh metadata before Copy() corrupts it: CClampedSource::m_meshindex[] is
+    // uninitialized, so Copy() writes garbage into pOrigSource->meshindex[].  All splits
+    // must use the original source's meshindex/texmap, not what Copy() leaves behind.
+    int savedMeshIndex[MAXSTUDIOSKINS];
+    int savedTexmap[MAXSTUDIOSKINS];
+    for (int i = 0; i < pOrigSource->nummeshes; i++) {
+        savedMeshIndex[i] = pOrigSource->meshindex[i];
+        savedTexmap[i]    = pOrigSource->texmap[i];
+    }
+
     // copy over new meshes and animations back into initial source
     free(pOrigSource->face);
     free(pOrigSource->vertex);
     newSource[0].Copy(pOrigSource);
+
+    // Restore meshindex/texmap that Copy() just clobbered with uninitialized data
+    for (int i = 0; i < pOrigSource->nummeshes; i++) {
+        pOrigSource->meshindex[i] = savedMeshIndex[i];
+        pOrigSource->texmap[i]    = savedTexmap[i];
+    }
 
     for (int n = 1; n < newSource.Count(); n++) {
         // create a new internal "source"
@@ -415,10 +432,10 @@ void ClampMaxVerticesPerModel(s_source_t *pOrigSource) {
         //   pSource->m_GlobalVertices
 
 
-        // copy mesh data
+        // copy mesh data - use saved values; pOrigSource->meshindex is garbage after Copy()
         for (int i = 0; i < pSource->nummeshes; i++) {
-            pSource->texmap[i] = pOrigSource->texmap[i];
-            pSource->meshindex[i] = pOrigSource->meshindex[i];
+            pSource->texmap[i]    = savedTexmap[i];
+            pSource->meshindex[i] = savedMeshIndex[i];
         }
 
         // copy settings
@@ -431,6 +448,9 @@ void ClampMaxVerticesPerModel(s_source_t *pOrigSource) {
         s_model_t *pModel = (s_model_t *) calloc(1, sizeof(s_model_t));
         pModel->source = pSource;
         sprintf(pModel->name, "%s%d", "clamped", n);
+        // inherit filename and rendermesh alias so LOD replacement lookup works for split parts
+        Q_strncpy(pModel->filename, pOrigModel->filename, sizeof(pModel->filename));
+        Q_strncpy(pModel->rendermesh_name, pOrigModel->rendermesh_name, sizeof(pModel->rendermesh_name));
         int imodel = g_nummodels++;
         g_model[imodel] = pModel;
 
@@ -788,11 +808,25 @@ int CStudioMDLApp::Main() {
     }
 
     if (!g_StudioMdlContext.createMakefile) {
-        int nCount = g_numsources;
-        for (int i = 0; i < nCount; i++) {
-            if (g_source[i]->isActiveModel) {
-                ClampMaxVerticesPerModel(g_source[i]);
-            }
+        // Rebuild isActiveModel from actual model->source references so that $rendermesh
+        // filtered clones are the only active geometry, not their unfiltered originals.
+        for (int i = 0; i < g_numsources; i++)
+            g_source[i]->isActiveModel = false;
+        for (int m = 0; m < g_nummodels; m++)
+            if (g_model[m] && g_model[m]->source)
+                g_model[m]->source->isActiveModel = true;
+
+        // Iterate by model so split parts inherit filename/rendermesh_name for LOD lookup.
+        // Track visited sources to avoid double-clamping shared source pointers.
+        CUtlVector<s_source_t *> clampedSources;
+        int nModelsBeforeClamp = g_nummodels;
+        for (int m = 0; m < nModelsBeforeClamp; m++) {
+            if (!g_model[m] || !g_model[m]->source || !g_model[m]->source->isActiveModel)
+                continue;
+            if (clampedSources.Find(g_model[m]->source) != -1)
+                continue;
+            clampedSources.AddToTail(g_model[m]->source);
+            ClampMaxVerticesPerModel(g_model[m]);
         }
 
         SetSkinValues();

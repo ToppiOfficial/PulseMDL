@@ -1054,6 +1054,8 @@ struct s_eyeball_t {
 struct s_model_t {
     char name[MAXSTUDIONAME];
     char filename[MAX_PATH];
+    // set when filename was resolved from a $rendermesh alias; used as the LOD lookup key
+    char rendermesh_name[MAX_PATH];
 
     // needs local scaling and rotation paramaters
     s_source_t *source; // index into source table
@@ -1102,6 +1104,7 @@ EXTERN s_flexcontroller_t g_flexcontroller[MAXSTUDIOFLEXCTRL];
 
 struct s_flexcontrollerremap_t {
     CUtlString m_Name;
+    CUtlString m_FlexGroup;             // flex controller type/group; empty means use m_Name
     FlexControllerRemapType_t m_RemapType;
     bool m_bIsStereo;
     std::vector<CUtlString> m_RawControls;
@@ -1710,6 +1713,7 @@ public:
         m_pSrcName = NULL;
         m_pDstName = NULL;
         m_pSource = 0;
+        m_flDecimationFactor = 1.0f;
     }
 
     ~CLodScriptReplacement_t() {
@@ -1718,6 +1722,7 @@ public:
     }
 
     s_source_t *m_pSource;
+    float m_flDecimationFactor;
 
 private:
     char *m_pSrcName;
@@ -1729,6 +1734,7 @@ struct LodScriptData_t {
 public:
     float switchValue;
     CUtlVector<CLodScriptReplacement_t> modelReplacements;
+    CUtlVector<CLodScriptReplacement_t> generateLods;
     CUtlVector<CLodScriptReplacement_t> boneReplacements;
     CUtlVector<CLodScriptReplacement_t> boneTreeCollapses;
     CUtlVector<CLodScriptReplacement_t> materialReplacements;

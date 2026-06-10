@@ -20,6 +20,7 @@
 #include "tier1/strtools.h"
 #include "mathlib/vmatrix.h"
 #include "studiomdl/optimize.h"
+#include "meshoptimizer.h"
 
 // debugging only - enabling turns off remapping to create all lod vertexes as unique
 // to ensure remapping logic does not introduce collapse anomalies
@@ -270,23 +271,25 @@ s_source_t *GetModelLODSource(const char *pModelName,
     // When doing LOD replacement, ignore all path + extension information
     char *pTempBuf = (char *) _alloca(Q_strlen(pModelName) + 1);
 
-    // Strip off extensions for the source...
+    // Strip extension
     strcpy(pTempBuf, pModelName);
     char *pDot = strrchr(pTempBuf, '.');
     if (pDot) {
         *pDot = 0;
     }
 
-    for (int i = 0; i < scriptLOD.modelReplacements.Count(); i++) {
-        // FIXME: Should we strip off path information?
-//		char* pSlash = strrchr( pTempBuf1, '\\' );
-//		char* pSlash2 = strrchr( pTempBuf1, '/' );
-//		if (pSlash2 > pSlash)
-//			pSlash = pSlash2;
-//		if (!pSlash)
-//			pSlash = pTempBuf1;
+    // Strip directory from the model's filename so that sources loaded from $pushd
+    // subdirectories match bare names written in replacemodel entries.
+    char *pSlash = strrchr(pTempBuf, '\\');
+    char *pSlash2 = strrchr(pTempBuf, '/');
+    if (pSlash2 > pSlash) pSlash = pSlash2;
+    const char *pBaseName = pSlash ? pSlash + 1 : pTempBuf;
 
-        if (!Q_stricmp(pTempBuf, scriptLOD.modelReplacements[i].GetSrcName())) {
+    for (int i = 0; i < scriptLOD.modelReplacements.Count(); i++) {
+        const char *pSrcName = scriptLOD.modelReplacements[i].GetSrcName();
+        // Primary: basename match (handles $pushd/$popd context shifts)
+        // Fallback: full path match (backward compat for QC files using relative paths)
+        if (!Q_stricmp(pBaseName, pSrcName) || !Q_stricmp(pTempBuf, pSrcName)) {
             *pFound = true;
             return scriptLOD.modelReplacements[i].m_pSource;
         }
@@ -526,202 +529,6 @@ CopyFaces(const s_source_t *pSrc, const s_mesh_t *pSrcMesh, CUtlVector<s_face_t>
     }
 }
 
-#define IGNORE_POSITION        0x01
-#define IGNORE_TEXCOORD        0x02
-#define IGNORE_BONEWEIGHT    0x04
-#define IGNORE_NORMAL        0x08
-#define IGNORE_TANGENTS        0x10
-
-//-----------------------------------------------------------------------------
-// return -1 if there is no match. The index returned is used to index into vertexDict.
-//-----------------------------------------------------------------------------
-static int FindVertexWithinVertexDictionary(const VertexInfo_t &find,
-                                            const CVertexDictionary &vertexDict, int nStartVert, int nEndVert,
-                                            int fIgnore) {
-    int nBestIndex = -1;
-    float flPositionError = 0.0f;
-    float flNormalError = 0.0f;
-    float flTangentSError = 0.0f;
-    float flTexcoordError = 0.0f;
-    float flBoneWeightError = 0.0f;
-    float flMinPositionError = FLT_MAX;
-    float flMinNormalError = FLT_MAX;
-    float flMinTangentSError = FLT_MAX;
-    float flMinTexcoordError = FLT_MAX;
-    float flMinBoneWeightError = FLT_MAX;
-    bool bFound;
-
-    if (fIgnore & IGNORE_POSITION) {
-        flMinPositionError = 0;
-        flPositionError = 0;
-    }
-
-    if (fIgnore & IGNORE_TEXCOORD) {
-        flMinTexcoordError = 0;
-        flTexcoordError = 0;
-    }
-
-    if (fIgnore & IGNORE_BONEWEIGHT) {
-        flMinBoneWeightError = 0;
-        flBoneWeightError = 0;
-    }
-
-    if (fIgnore & IGNORE_NORMAL) {
-        flMinNormalError = 0;
-        flNormalError = 0;
-    }
-
-    if (fIgnore & IGNORE_TANGENTS) {
-        flMinTangentSError = 0;
-        flTangentSError = 0;
-    }
-
-    for (int nVertexIndex = nStartVert; nVertexIndex < nEndVert; ++nVertexIndex) {
-        // see if the position is reasonable
-        if (!(fIgnore & IGNORE_POSITION) &&
-            !ComparePositionFuzzy(find.m_Position, vertexDict.Vertex(nVertexIndex).m_Position, flPositionError))
-            continue;
-
-        if (!(fIgnore & IGNORE_TEXCOORD) &&
-            !CompareTexCoordsFuzzy(find.m_TexCoord, vertexDict.Vertex(nVertexIndex).m_TexCoord, flTexcoordError))
-            continue;
-
-        if (!(fIgnore & IGNORE_BONEWEIGHT) &&
-            !CompareBoneWeightsFuzzy(find.m_BoneWeight, vertexDict.Vertex(nVertexIndex).m_BoneWeight,
-                                     flBoneWeightError))
-            continue;
-
-        if (!(fIgnore & IGNORE_NORMAL) &&
-            !CompareNormalFuzzy(find.m_Normal, vertexDict.Vertex(nVertexIndex).m_Normal, flNormalError))
-            continue;
-
-        if (!(fIgnore & IGNORE_TANGENTS) &&
-            !CompareTangentSFuzzy(find.m_TangentS, vertexDict.Vertex(nVertexIndex).m_TangentS, flTangentSError))
-            continue;
-
-        // the vert with minimum error is the best or exact candidate
-        bFound = false;
-        if (flMinPositionError > flPositionError) {
-            bFound = true;
-        } else if (flMinPositionError == flPositionError) {
-            if (flMinTexcoordError > flTexcoordError) {
-                bFound = true;
-            } else if (flMinTexcoordError == flTexcoordError) {
-                if (flMinBoneWeightError > flBoneWeightError) {
-                    bFound = true;
-                } else if (flMinBoneWeightError == flBoneWeightError) {
-                    if (flMinNormalError > flNormalError) {
-                        bFound = true;
-                    } else if (flMinNormalError == flNormalError) {
-                        if (flMinTangentSError >= flTangentSError) {
-                            bFound = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!bFound)
-            continue;
-
-        flMinPositionError = flPositionError;
-        flMinTexcoordError = flTexcoordError;
-        flMinBoneWeightError = flBoneWeightError;
-        flMinNormalError = flNormalError;
-        flMinTangentSError = flTangentSError;
-        nBestIndex = nVertexIndex;
-    }
-
-    return nBestIndex;
-}
-
-
-//-----------------------------------------------------------------------------
-// Use position, normal, and texcoord checks across the entire model to find a boneweight
-//-----------------------------------------------------------------------------
-static void
-FindBoneWeightWithinModel(const VertexInfo_t &searchVertex, const s_source_t *pSrc, s_boneweight_t &boneWeight,
-                          int fIgnore) {
-    int nBestIndex = -1;
-    float flPositionError = 0.0f;
-    float flNormalError = 0.0f;
-    float flTangentSError = 0.0f;
-    float flTexcoordError = 0.0f;
-    float flMinPositionError = FLT_MAX;
-    float flMinNormalError = FLT_MAX;
-    float flMinTangentSError = FLT_MAX;
-    float flMinTexcoordError = FLT_MAX;
-    bool bFound;
-
-    if (fIgnore & IGNORE_NORMAL) {
-        flMinNormalError = 0;
-        flNormalError = 0;
-    }
-
-    if (fIgnore & IGNORE_TEXCOORD) {
-        flMinTexcoordError = 0;
-        flTexcoordError = 0;
-    }
-
-    if (fIgnore & IGNORE_TANGENTS) {
-        flMinTangentSError = 0;
-        flTangentSError = 0;
-    }
-
-    int nVertexCount = pSrc->m_GlobalVertices.Count();
-    for (int i = 0; i < nVertexCount; i++) {
-        const s_vertexinfo_t &srcVertex = pSrc->m_GlobalVertices[i];
-
-        // Compute error metrics
-        ComparePositionFuzzy(searchVertex.m_Position, srcVertex.position, flPositionError);
-
-        if (!(fIgnore & IGNORE_NORMAL)) {
-            CompareNormalFuzzy(searchVertex.m_Normal, srcVertex.normal, flNormalError);
-        }
-
-        if (!(fIgnore & IGNORE_TEXCOORD)) {
-            CompareTexCoordsFuzzy(searchVertex.m_TexCoord, srcVertex.texcoord, flTexcoordError);
-        }
-
-        if (!(fIgnore & IGNORE_TANGENTS)) {
-            CompareTangentSFuzzy(searchVertex.m_TangentS, srcVertex.tangentS, flTangentSError);
-        }
-
-        // the vert with minimum error is the best or exact candidate
-        bFound = false;
-        if (flMinPositionError > flPositionError) {
-            bFound = true;
-        } else if (flMinPositionError == flPositionError) {
-            if (flMinTexcoordError > flTexcoordError) {
-                bFound = true;
-            } else if (flMinTexcoordError == flTexcoordError) {
-                if (flMinNormalError > flNormalError) {
-                    bFound = true;
-                } else if (flMinNormalError == flNormalError) {
-                    if (flMinTangentSError >= flTangentSError) {
-                        bFound = true;
-                    }
-                }
-            }
-        }
-
-        if (bFound) {
-            flMinPositionError = flPositionError;
-            flMinTexcoordError = flTexcoordError;
-            flMinNormalError = flNormalError;
-            flMinTangentSError = flTangentSError;
-            nBestIndex = i;
-        }
-    }
-
-    if (nBestIndex == -1) {
-        MdlError("Encountered a mesh with no vertices!\n");
-    }
-
-    memcpy(&boneWeight, &pSrc->m_GlobalVertices[nBestIndex].boneweight, sizeof(s_boneweight_t));
-}
-
-
 //-----------------------------------------------------------------------------
 // Modify the bone weights in all of the vertices....
 //-----------------------------------------------------------------------------
@@ -760,76 +567,6 @@ static void CollapseBoneWeights(s_boneweight_t &boneWeight) {
     }
 
     ValidateBoneWeight(boneWeight);
-}
-
-
-//-----------------------------------------------------------------------------
-// Find a matching vertex within the root lod 
-//-----------------------------------------------------------------------------
-static void CalculateBoneWeightFromRootLod(const VertexInfo_t &searchVertex, CVertexDictionary &vertexDict,
-                                           const s_source_t *pRootLODSrc, VertexInfo_t &idealVertex) {
-    idealVertex = searchVertex;
-
-    // Look through the part of the vertex dictionary associated with the root LODs for a match
-    // bone weights are not defined properly in SMDs for lower LODs, so don't consider
-    // we can only accept the boneweight from the root LOD
-    int nFlags = g_bSkinnedLODs ? IGNORE_TANGENTS : IGNORE_BONEWEIGHT | IGNORE_TANGENTS;
-    int nVertexDictID = FindVertexWithinVertexDictionary(searchVertex, vertexDict,
-                                                         vertexDict.RootLODVertexStart(), vertexDict.RootLODVertexEnd(),
-                                                         nFlags);
-    if (nVertexDictID != -1) {
-        Assert(nVertexDictID >= vertexDict.RootLODVertexStart() && nVertexDictID < vertexDict.RootLODVertexEnd());
-        Assert(nVertexDictID >= 0 && nVertexDictID < vertexDict.VertexCount());
-
-        // found vertex in dictionary
-#ifdef UNIQUE_VERTEXES_FOR_LOD
-        if ( !g_bSkinnedLODs )
-        {
-            // keep entry vertex and fill in the missing bone weight attribute
-            idealVertex.m_BoneWeight = vertexDict.Vertex( nVertexDictID ).m_BoneWeight;
-        }
-        else
-#else
-        // discard entry vertex in favor of best match
-        // this ensures all the attributes, including bone weight are correct for that vertex
-        // the worst case is that the vertex is not an *exact* match for entry attributes just a "close" match
-        idealVertex = vertexDict.Vertex(nVertexDictID);
-#endif
-        return;
-    }
-
-    // In this case, we didn't find anything within the tolerance, so we need to
-    // do a *positional check only* to give us a bone weight to assign to this vertex.
-    if (!g_bSkinnedLODs) {
-        FindBoneWeightWithinModel(searchVertex, pRootLODSrc, idealVertex.m_BoneWeight,
-                                  IGNORE_BONEWEIGHT | IGNORE_TANGENTS);
-    }
-}
-
-//-----------------------------------------------------------------------------
-// Find a matching vertex
-//-----------------------------------------------------------------------------
-static void CalculateIdealVert(const VertexInfo_t &searchVertex, CVertexDictionary &vertexDict,
-                               const s_mesh_t *pVertexDictMesh, const s_source_t *pRootLODSrc,
-                               VertexInfo_t &idealVertex) {
-#ifndef UNIQUE_VERTEXES_FOR_LOD
-    // Only look through the part of the vertex dictionary associated with all *higher* LODs for a match
-    int nVertexDictID = FindVertexWithinVertexDictionary(searchVertex, vertexDict,
-                                                         pVertexDictMesh->vertexoffset, vertexDict.PrevLODVertexCount(),
-                                                         0);
-    if (nVertexDictID != -1) {
-        Assert(nVertexDictID >= pVertexDictMesh->vertexoffset && nVertexDictID < vertexDict.PrevLODVertexCount());
-        Assert(nVertexDictID >= 0 && nVertexDictID < vertexDict.VertexCount());
-
-        // found vertex in dictionary
-        idealVertex = vertexDict.Vertex(nVertexDictID);
-        return;
-    }
-#endif
-
-    // could not find a tolerant match
-    // the search vertex is unique
-    idealVertex = searchVertex;
 }
 
 
@@ -1001,15 +738,12 @@ static void PrintSBoneWeight(s_boneweight_t *pBoneWeight, const s_source_t *pSrc
 // vertex dictionary, and use them if you find them, or add new vertices to the 
 // vertex dictionary if not and use those new vertices.
 //-----------------------------------------------------------------------------
-static void CreateLODVertsInDictionary(int nLodID, const s_source_t *pRootLODSrc, s_source_t *pCurrentLODSrc,
+static void CreateLODVertsInDictionary(int nLodID, s_source_t *pCurrentLODSrc,
                                        const s_mesh_t *pCurrLODMesh, s_mesh_t *pVertexDictMesh,
                                        CVertexDictionary &vertexDict, int *pMeshVertIndexMap) {
-    // this function is specific to lods and not the root
     Assert(nLodID);
 
     int nNumCurrentVerts = vertexDict.VertexCount();
-
-    // Used to control where we look for vertices + merging rules
     vertexDict.StartNewLOD();
 
     CUtlVector<int> boneMap;
@@ -1017,55 +751,26 @@ static void CreateLODVertsInDictionary(int nLodID, const s_source_t *pRootLODSrc
 
     for (int nSrcVertID = 0; nSrcVertID < pCurrLODMesh->numvertices; ++nSrcVertID) {
         int nSrcID = nSrcVertID + pCurrLODMesh->vertexoffset;
-
-        // candidate vertex
-        // vertices at lower LODs have bogus boneweights assigned
-        // must get the boneweight from the nearest or exact vertex at root lod
         const s_vertexinfo_t &srcVertex = pCurrentLODSrc->m_GlobalVertices[nSrcID];
+
         VertexInfo_t vertex;
         vertex.m_Position = srcVertex.position;
         vertex.m_Normal = srcVertex.normal;
         vertex.m_TangentS = srcVertex.tangentS;
-
-        for (int i = 0; i < MAXSTUDIOTEXCOORDS; ++i) {
+        vertex.m_BoneWeight = srcVertex.boneweight;
+        vertex.m_nLodFlag = 1 << nLodID;
+        for (int i = 0; i < MAXSTUDIOTEXCOORDS; ++i)
             vertex.m_TexCoord[i] = srcVertex.texcoord[i];
-        }
         vertex.m_numTexCoords = srcVertex.numTexcoord;
 
-        if (g_bSkinnedLODs) {
-            vertex.m_BoneWeight = srcVertex.boneweight;
-        } else {
-#ifdef _DEBUG
-            memset(&vertex.m_BoneWeight, 0xDD, sizeof(s_boneweight_t));
-#endif
-        }
+        // Apply per-LOD bone remapping (replacebone / bonetreecollapse commands)
+        RemapBoneWeights(boneMap, vertex.m_BoneWeight);
+        CollapseBoneWeights(vertex.m_BoneWeight);
+        SortBoneWeightByWeight(vertex.m_BoneWeight);
 
-        // determine the best bone weight for the desired vertex within the root lod only
-        // the root lod contains no bone remappings
-        // this ensures we get a vertex with its matched proper boneweight assignment
-        VertexInfo_t idealVertex;
-        CalculateBoneWeightFromRootLod(vertex, vertexDict, pRootLODSrc, idealVertex);
+        MarkBonesUsedByLod(vertex.m_BoneWeight, nLodID);
 
-        // try again to match the candidate vertex
-        // determine the ideal vertex with desired remapped boneweight
-        vertex = idealVertex;
-        CalculateIdealVert(vertex, vertexDict, pVertexDictMesh, pRootLODSrc, idealVertex);
-
-        // remap bone
-        RemapBoneWeights(boneMap, idealVertex.m_BoneWeight);
-        CollapseBoneWeights(idealVertex.m_BoneWeight);
-        SortBoneWeightByWeight(idealVertex.m_BoneWeight);
-
-        // FIXME: this is marking bones based on the slammed vertex data
-        MarkBonesUsedByLod(idealVertex.m_BoneWeight, nLodID);
-
-        // tag ideal vertex as being part of the current lod
-        idealVertex.m_nLodFlag = 1 << nLodID;
-
-        // Find the exact vertex or create it in the dictionary
-        int nMeshVertID = FindOrCreateExactVertexInDictionary(vertexDict, idealVertex, pVertexDictMesh);
-
-        // Indicate where in the higher LODs the vertex we selected resides
+        int nMeshVertID = FindOrCreateExactVertexInDictionary(vertexDict, vertex, pVertexDictMesh);
         pMeshVertIndexMap[nSrcID] = nMeshVertID;
     }
 
@@ -1283,7 +988,7 @@ static void UnifyModelLODs(s_model_t *pSrcModel) {
             if (!pCurrLODMesh)
                 continue;
 
-            CreateLODVertsInDictionary(nLodID, pLOD0Source, pCurrLOD, pCurrLODMesh, pVertexDictMesh, vertexDictionary,
+            CreateLODVertsInDictionary(nLodID, pCurrLOD, pCurrLODMesh, pVertexDictMesh, vertexDictionary,
                                        pMeshVertIndexMaps[nLodID]);
         }
     }
@@ -1385,16 +1090,164 @@ void MarkParentBoneLODs() {
 
 
 //-----------------------------------------------------------------------------
+// Strip path and extension from a model name for comparison, same convention
+// as GetModelLODSource. Writes result into buf (size MAX_PATH).
+//-----------------------------------------------------------------------------
+static const char *GetModelBaseName(const char *pName, char *buf) {
+    Q_strncpy(buf, pName, MAX_PATH);
+    char *pDot = strrchr(buf, '.');
+    if (pDot) *pDot = 0;
+    char *pSlash = strrchr(buf, '\\');
+    char *pSlash2 = strrchr(buf, '/');
+    if (pSlash2 > pSlash) pSlash = pSlash2;
+    return pSlash ? pSlash + 1 : buf;
+}
+
+
+//-----------------------------------------------------------------------------
+// Decimate pSrc using meshoptimizer and return a new registered s_source_t.
+// factor 1.0 = full detail, 0.5 = half triangles. Uses LOD0's vertex data
+// so bone weights are already correct - no transfer needed.
+//-----------------------------------------------------------------------------
+static s_source_t *GenerateDecimatedSource(const s_source_t *pSrc, float factor, int nLodID) {
+    if (g_numsources >= MAXSTUDIOSEQUENCES)
+        MdlError("GenerateDecimatedSource: ran out of source slots\n");
+
+    s_source_t *pDst = (s_source_t *)calloc(1, sizeof(s_source_t));
+    g_source[g_numsources++] = pDst;
+
+    // Shallow copy - shares bone table, animation data, etc.
+    memcpy(pDst, pSrc, sizeof(s_source_t));
+
+    // Zero m_GlobalVertices before copying. After memcpy the CUtlVector internals
+    // are aliased to pSrc's backing allocation. operator= only reallocates when
+    // capacity is insufficient, so it would leave them sharing the same buffer.
+    // When RemapVerticesToGlobalBones later grows pSrc->m_GlobalVertices it may
+    // free the old allocation, leaving pDst with a dangling pointer. Zeroing
+    // forces operator= to always allocate a fresh independent buffer.
+    memset(&pDst->m_GlobalVertices, 0, sizeof(pDst->m_GlobalVertices));
+    pDst->m_GlobalVertices = pSrc->m_GlobalVertices;
+
+    // Per-mesh decimation: build new faces for each material mesh
+    struct MeshFaces { CUtlVector<s_face_t> faces; };
+    MeshFaces meshResults[MAXSTUDIOSKINS];
+
+    int nTotalNewFaces = 0;
+    float resultError = 0.0f;
+    int nGlobalVertCount = pSrc->m_GlobalVertices.Count();
+
+    unsigned int simplifyOptions = g_staticprop ? meshopt_SimplifyLockBorder : 0;
+
+    for (int mi = 0; mi < pSrc->nummeshes; mi++) {
+        int matID = pSrc->meshindex[mi];
+        const s_mesh_t &srcMesh = pSrc->mesh[matID];
+
+        if (srcMesh.numfaces == 0 || srcMesh.numvertices == 0 || nGlobalVertCount == 0)
+            continue;
+
+        // Skip meshes that will be removed by removemesh - no point decimating them
+        if (FindOrCullMesh(nLodID, const_cast<s_source_t *>(pSrc), matID) == nullptr)
+            continue;
+
+        // Face indices are mesh-local (0..numvertices-1), so pass the mesh's own vertex slice.
+        // s_vertexinfo_t has int material + int mesh before Vector position, so pass &position
+        // with sizeof(s_vertexinfo_t) stride so meshoptimizer advances correctly.
+        const float *pMeshPositions = (const float *)&pSrc->m_GlobalVertices[srcMesh.vertexoffset].position;
+
+        int nSrcIndices = srcMesh.numfaces * 3;
+        CUtlVector<unsigned int> srcIdx, dstIdx;
+        srcIdx.SetCount(nSrcIndices);
+        dstIdx.SetCount(nSrcIndices);
+
+        for (int fi = 0; fi < srcMesh.numfaces; fi++) {
+            const s_face_t &f = pSrc->face[srcMesh.faceoffset + fi];
+            srcIdx[fi * 3 + 0] = f.a;
+            srcIdx[fi * 3 + 1] = f.b;
+            srcIdx[fi * 3 + 2] = f.c;
+        }
+
+        size_t targetIdx = (size_t)((float)nSrcIndices * factor);
+        targetIdx = (targetIdx / 3) * 3;
+        if (targetIdx < 3) targetIdx = 3;
+
+        size_t newIdxCount = meshopt_simplify(
+            dstIdx.Base(), srcIdx.Base(), (size_t)nSrcIndices,
+            pMeshPositions, (size_t)srcMesh.numvertices, sizeof(s_vertexinfo_t),
+            targetIdx, 1.0f, simplifyOptions, &resultError);
+
+        for (size_t fi = 0; fi < newIdxCount / 3; fi++) {
+            s_face_t face;
+            face.a = dstIdx[(int)(fi * 3 + 0)];
+            face.b = dstIdx[(int)(fi * 3 + 1)];
+            face.c = dstIdx[(int)(fi * 3 + 2)];
+            face.d = 0xFFFFFFFF;
+            meshResults[matID].faces.AddToTail(face);
+        }
+        nTotalNewFaces += (int)(newIdxCount / 3);
+    }
+
+    // Build new flat face array
+    pDst->face = nTotalNewFaces > 0
+        ? (s_face_t *)malloc(nTotalNewFaces * sizeof(s_face_t))
+        : nullptr;
+    pDst->numfaces = nTotalNewFaces;
+
+    int faceOffset = 0;
+    for (int mi = 0; mi < pSrc->nummeshes; mi++) {
+        int matID = pSrc->meshindex[mi];
+        s_mesh_t &dstMesh = pDst->mesh[matID];
+        dstMesh.faceoffset = faceOffset;
+        dstMesh.numfaces = meshResults[matID].faces.Count();
+        if (dstMesh.numfaces > 0)
+            memcpy(pDst->face + faceOffset, meshResults[matID].faces.Base(),
+                   dstMesh.numfaces * sizeof(s_face_t));
+        faceOffset += dstMesh.numfaces;
+    }
+
+    if (!g_StudioMdlContext.quiet) {
+        printf("generatelod: %d -> %d faces (factor %.2f, error %.4f)\n",
+               pSrc->numfaces, nTotalNewFaces, factor, resultError);
+    }
+
+    return pDst;
+}
+
+
+//-----------------------------------------------------------------------------
 // Returns the sources associated with the various LODs based on the script commands
 //-----------------------------------------------------------------------------
 static void GetLODSources(CUtlVector<s_source_t *> &lods, const s_model_t *pSrcModel) {
     int nNumLODs = g_ScriptLODs.Count();
     lods.EnsureCount(nNumLODs);
+
+    const char *pLookupName = (pSrcModel->rendermesh_name[0] != '\0')
+        ? pSrcModel->rendermesh_name : pSrcModel->filename;
+
+    char baseBuf[MAX_PATH];
+    const char *pBaseName = GetModelBaseName(pLookupName, baseBuf);
+
     for (int lodID = 0; lodID < nNumLODs; lodID++) {
         LodScriptData_t &scriptLOD = g_ScriptLODs[lodID];
 
         bool bFound;
-        s_source_t *pSource = GetModelLODSource(pSrcModel->filename, scriptLOD, &bFound);
+        s_source_t *pSource = GetModelLODSource(pLookupName, scriptLOD, &bFound);
+
+        if (!pSource && !bFound) {
+            // Check generatelod entries - decimate LOD0's geometry for this LOD level
+            for (int j = 0; j < scriptLOD.generateLods.Count(); j++) {
+                char entryBuf[MAX_PATH];
+                const char *pEntryBase = GetModelBaseName(scriptLOD.generateLods[j].GetSrcName(), entryBuf);
+                if (Q_stricmp(pBaseName, pEntryBase) == 0) {
+                    s_source_t *pLOD0 = lods.Count() > 0 ? lods[0] : pSrcModel->source;
+                    if (pLOD0 && !scriptLOD.IsStrippedFromModel()) {
+                        pSource = GenerateDecimatedSource(pLOD0, scriptLOD.generateLods[j].m_flDecimationFactor, lodID);
+                    }
+                    bFound = true;
+                    break;
+                }
+            }
+        }
+
         if (!pSource && !bFound) {
             pSource = pSrcModel->source;
         }

@@ -475,7 +475,7 @@ void CClampedSource::AddAnimations(const s_source_t *pOrigSource) {
         dstAnim.newStyleVertexAnimations = srcAnim.newStyleVertexAnimations;
 
         if (!srcAnim.newStyleVertexAnimations)
-            return;
+            continue;
 
         for (int i = 0; i < MAXSTUDIOANIMFRAMES; i++) {
             // Count the number of verts which apply to this sub-model...
@@ -551,7 +551,10 @@ void CClampedSource::CopyFlexKeys(const s_source_t *pOrigSource, s_source_t *pNe
     pNewSource->m_FlexKeys.SetCount(pOrigSource->m_FlexKeys.Count());
     for (int i = 0; i < pOrigSource->m_FlexKeys.Count(); i++) {
         pNewSource->m_FlexKeys[i] = pOrigSource->m_FlexKeys[i];
-        pNewSource->m_FlexKeys[i].source = pNewSource;
+        // Only redirect source when the flex key uses the original body source (DMX).
+        // SMD flex keys may reference a separate file source - leave those intact.
+        if (pNewSource->m_FlexKeys[i].source == pOrigSource)
+            pNewSource->m_FlexKeys[i].source = pNewSource;
     }
     pNewSource->m_CombinationControls.SetCount(pOrigSource->m_CombinationControls.Count());
     for (int i = 0; i < pOrigSource->m_CombinationControls.Count(); i++) {
@@ -873,15 +876,18 @@ s_source_t *Load_Source(const char *name, const char *ext, bool reverse, bool is
     pSource->rotation = g_defaultrotation;
     typedef int (*load_proc)(s_source_t *);
 
+    // SMD variants come first so that extensionless names resolve to SMD by default,
+    // matching the Valve SDK documentation ("file extension must be defined for formats
+    // other than SMD"). Non-SMD formats are still tried as fallback when no .smd exists.
     std::array<std::pair<const char *, load_proc>, 9> supported_formats = {
-            std::make_pair("vrm", Load_VRM),
-            std::make_pair("dmx", Load_DMX),
-            std::make_pair("mpp", Load_DMX),
             std::make_pair("smd", Load_SMD),
             std::make_pair("sma", Load_SMD),
             std::make_pair("phys", Load_SMD),
             std::make_pair("vta", Load_VTA),
+            std::make_pair("dmx", Load_DMX),
+            std::make_pair("mpp", Load_DMX),
             std::make_pair("obj", Load_OBJ),
+            std::make_pair("vrm", Load_VRM),
             std::make_pair("xml", Load_DMX)
     };
     // build list of directories to search: primary first, then $addsearchdir fallbacks
@@ -1139,6 +1145,7 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
         int k = pSource->m_FlexControllerRemaps.AddToTail();
         s_flexcontrollerremap_t &remap = pSource->m_FlexControllerRemaps[k];
         remap.m_Name = pCombination->GetControlName(i);
+        remap.m_FlexGroup = pCombination->GetControlFlexGroup(i);
         remap.m_bIsStereo = pCombination->IsStereoControl(i);
         remap.m_Index = -1;            // Don't know this right now
         remap.m_LeftIndex = -1;        // Don't know this right now

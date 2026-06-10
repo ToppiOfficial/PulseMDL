@@ -2558,7 +2558,7 @@ void RemapVertexAnimations() {
         s_sourceanim_t *pVSourceAnim = FindSourceAnim(pVSource, g_flexkey[i].animationname);
 
         // We only do old-style vertex animations
-        if (pVSourceAnim->newStyleVertexAnimations)
+        if (!pVSourceAnim || pVSourceAnim->newStyleVertexAnimations)
             continue;
 
         // skip if it's already been done or if has doesn't have any animations
@@ -2630,7 +2630,7 @@ void RemapVertexAnimations() {
         pvsource = g_flexkey[i].source;
         pAnimationName = g_flexkey[i].animationname;
         pSourceAnim = FindSourceAnim(pvsource, pAnimationName);
-        if (pSourceAnim->newStyleVertexAnimations)
+        if (!pSourceAnim || pSourceAnim->newStyleVertexAnimations)
             continue;
 
         pmLodSource = g_model[g_flexkey[i].imodel]->m_pLodData;
@@ -2757,7 +2757,12 @@ static void RemapVertexAnimationsNewVersion() {
         s_flexkey_t *pFlexKey = ppSortedFlexKeys[i];
         s_source_t *pVSource = pFlexKey->source;
         s_sourceanim_t *pVSourceAnim = FindSourceAnim(pVSource, pFlexKey->animationname);
+        if (!pVSourceAnim || !pVSourceAnim->newStyleVertexAnimations)
+            continue;
+
         s_loddata_t *pLodSource = g_model[pFlexKey->imodel]->m_pLodData;
+        if (!pLodSource)
+            continue;
 
         if (pVSource != pVLastSource) {
             // Map vertex indices specified in the model to ones specified in the vanim data
@@ -2801,7 +2806,7 @@ static void RemapVertexAnimationsNewVersion() {
     for (int i = 0; i < g_numflexkeys; i++) {
         s_source_t *pVSource = g_flexkey[i].source;
         s_sourceanim_t *pVSourceAnim = FindSourceAnim(pVSource, g_flexkey[i].animationname);
-        if (!pVSourceAnim->newStyleVertexAnimations)
+        if (!pVSourceAnim || !pVSourceAnim->newStyleVertexAnimations)
             continue;
 
         // Allocate g_flexkey[i].vanim
