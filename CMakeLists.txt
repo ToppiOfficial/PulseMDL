@@ -39,6 +39,7 @@ add_subdirectory(libs/bonesetup)
 add_subdirectory(libs/meshutils)
 add_subdirectory(libs/interfaces)
 add_subdirectory(libs/filesystem)
+add_subdirectory(libs/minicollision)
 
 
 add_executable(kitsunemdl
@@ -65,7 +66,7 @@ add_executable(kitsunemdl
         studiomdl/studiomdl_app.h
 )
 target_compile_definitions(kitsunemdl PRIVATE -DSTATIC_TIER0)
-target_include_directories(kitsunemdl PUBLIC include)
+target_include_directories(kitsunemdl PUBLIC include libs/minicollision)
 target_link_libraries(kitsunemdl PRIVATE
         tier0
         tier1
@@ -83,5 +84,6 @@ target_link_libraries(kitsunemdl PRIVATE
         meshoptimizer
         shlwapi
         filesystem_stdio_v2_static
+        minicollision
         )
 

@@ -21,7 +21,10 @@
 #include "dmserializers/idmserializers.h"
 #include "mdllib/mdllib.h"
 #include "filesystem/filesystem_stdio.h"
+#include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
+
+static const char *KITSUNE_MDL_VERSION = "0.1.0";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -650,7 +653,7 @@ void UsageAndExit() {
              "[-definebones]\n"
              "[-f] - flip all triangles\n"
              "[-fullcollide] - don't truncate really big collisionmodels\n"
-             "[-game <gamedir>]\n"
+             "[-game <gamedir>] - optional; if omitted, output is written next to the .qc\n"
              "[-h] - dump hboxes\n"
              "[-i] - ignore warnings\n"
              "[-minlod <lod>] - truncate to highest detail <lod>\n"
@@ -683,7 +686,7 @@ void UsageAndExit() {
              "[-maxwarnings]\n"
              "[-preview]\n"
              "[-dumpmaterials]\n"
-             "[-definevariable <variable> <value>] (repeatable)\n"
+             "[-defvar <variable> <value>] (repeatable)\n"
              "[-includedir <dir>] (repeatable, fallback search path for $include)\n"
              "[-basedir]\n"
              "[-tempcontent]\n"
@@ -930,6 +933,8 @@ int CStudioMDLApp::Main() {
 // The application object
 //-----------------------------------------------------------------------------
 bool CStudioMDLApp::Create() {
+    printf("KitsuneMDL v%s\n", KITSUNE_MDL_VERSION);
+
     // Ensure that cmdlib spew function & associated state is initialized
     InstallSpewFunction();
     // Override the cmdlib spew function
@@ -977,15 +982,48 @@ bool CStudioMDLApp::PreInit() {
         return false;
     }
 
-    if (!SetupSearchPaths(g_StudioMdlContext.g_path, false, true))
-        return false;
+    // -game/-vproject is optional. When it's supplied we resolve a full game
+    // tree (gameinfo.txt) as usual. When it's absent we don't want to fatally
+    // abort if no gameinfo.txt can be auto-detected - instead we fall back to a
+    // standalone mode that treats the .qc's own folder as the game root, so the
+    // compiled .mdl/.vvd/.phy land next to the .qc (mirroring the $modelname path).
+    const bool bHaveGame = (GetVProjectCmdLineValue() != NULL);
+
+    if (!bHaveGame)
+        FileSystem_SetErrorMode(FS_ERRORMODE_NONE);
+
+    bool bSearchPathsOk = SetupSearchPaths(g_StudioMdlContext.g_path, false, true);
+
+    if (!bHaveGame)
+        FileSystem_SetErrorMode(FS_ERRORMODE_AUTO);
 
     // NOTE: This is necessary to get the cmdlib filesystem stuff to work.
     g_pFileSystem = g_pFullFileSystem;
 
-    // NOTE: This is stuff copied out of cmdlib necessary to get
-    // the tools in cmdlib working
-    FileSystem_SetupStandardDirectories(g_StudioMdlContext.g_path, GetGameInfoPath());
+    if (bSearchPathsOk) {
+        // NOTE: This is stuff copied out of cmdlib necessary to get
+        // the tools in cmdlib working
+        FileSystem_SetupStandardDirectories(g_StudioMdlContext.g_path, GetGameInfoPath());
+    } else {
+        // -game was supplied but couldn't be resolved - that's a genuine error.
+        if (bHaveGame)
+            return false;
+
+        // Standalone: no game tree. Use the .qc's own directory as the game
+        // root so output is written right where the .qc is.
+        char qcDir[MAX_PATH];
+        Q_ExtractFilePath(g_StudioMdlContext.g_path, qcDir, sizeof(qcDir));
+        if (!qcDir[0])
+            Q_strncpy(qcDir, ".", sizeof(qcDir));
+
+        // Let the compiler read assets sitting next to the .qc.
+        g_pFullFileSystem->AddSearchPath(qcDir, "GAME", PATH_ADD_TO_HEAD);
+
+        FileSystem_SetupStandardDirectories(g_StudioMdlContext.g_path, qcDir);
+
+        if (!g_StudioMdlContext.quiet)
+            printf("No -game specified; writing output next to the .qc (\"%s\").\n", gamedir);
+    }
     return true;
 }
 
@@ -1181,9 +1219,9 @@ bool CStudioMDLApp::ParseArguments() {
             continue;
         }
 
-        if (!Q_stricmp(pArgv, "-definevariable")) {
+        if (!Q_stricmp(pArgv, "-defvar")) {
             if (i + 2 >= argc) {
-                MdlError("-definevariable requires two arguments: <variable> <value>\n");
+                MdlError("-defvar requires two arguments: <variable> <value>\n");
                 return false;
             }
             const char *pVar   = CommandLine()->GetParm(++i);

@@ -3401,12 +3401,23 @@ bool BoneIsProcedural(char const *pname) {
 
 
 bool BoneIsIK(char const *pname) {
-    int k;
-
-    // tag bones used by ikchains
-    for (k = 0; k < g_numikchains; k++) {
-        if (!stricmp(g_ikchain[k].bonename, pname)) {
+    for (int k = 0; k < g_numikchains; k++) {
+        // end effector bone
+        if (!stricmp(g_ikchain[k].bonename, pname))
             return true;
+
+        // link[1] (knee/elbow) and link[0] (hip/shoulder) are the two ancestors
+        // of the end effector; protect them too since link[].bone isn't resolved yet
+        int boneIdx = findGlobalBone(g_ikchain[k].bonename);
+        if (boneIdx == -1)
+            continue;
+        int parent = g_bonetable[boneIdx].parent;
+        if (parent != -1) {
+            if (!stricmp(g_bonetable[parent].name, pname))
+                return true;
+            int grandparent = g_bonetable[parent].parent;
+            if (grandparent != -1 && !stricmp(g_bonetable[grandparent].name, pname))
+                return true;
         }
     }
 

@@ -4,21 +4,13 @@
 
 A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2).
 
-## Requirements
-
-`$collisionmodel` and `$collisionjoints` require the following DLLs placed alongside the executable, sourced from TF2's `bin/x64/` folder: (Not sure if other 64-bit source engine game can work)
-
-- `vphysics.dll`
-- `tier0.dll`
-- `vstdlib.dll`
-
 
 `DMX model 18` but lower version can maybe still work
 
 ## TODO
 
-- Remove the dependency for vphysics.dll (but still able to compile collisionjoints and collisionmodel) and dmxconvert.exe
-- Explore the issue stated by REDxEYE about mesh split corrupting flex vertices.
+- ~~Remove the dependency for vphysics.dll (but still able to compile collisionjoints and collisionmodel) and dmxconvert.exe~~
+- ~~Explore the issue stated by REDxEYE about mesh split corrupting flex vertices.~~ (may not work well with the new lod system)
 - Further clean and remove "unused/dead code"
 - Improve the loading and fix some crashes when dealing with large SMD model
 
@@ -40,7 +32,7 @@ A standalone fork of Valve's StudioMDL compiler based on [REDxEYE/studiomdl_v2](
   - If bone is BoneFlexDriver
 - `$definevariable` now work inside quotation but `$definemacro` does not.
 - Multiple engine branch support but requires additional launch parameter `-newvtx` for Alien Swarm to CS:GO Engine Branch. (The minium is likely Team Fortress 2 or SourceSDK2013)
-- variables can now be defined outside of qc through `-definevariable <var name> <value>` launch parameter. (can be repeated)
+- variables can now be defined outside of qc through `-defvar <var name> <value>` launch parameter. (can be repeated)
 - `$include` now has a fallback directory if it is not found on the specified path using the new launch parameter `-includedir <dir>`. (can be repeated)
 - Can compile for DirectX8 and can be opted out with `-nodx80` similar to StudioMDL++
 - `$addsearchdir` now works correctly for SMD/DMX source file lookup

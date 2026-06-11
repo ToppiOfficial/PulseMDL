@@ -19,13 +19,13 @@
 #include "mathlib/mathlib.h"
 #include "studiomdl/studiomdl.h"
 #include "phyfile.h"
+#include "MiniVPhysics.h"
 #include "tier1/strtools.h"
 #include "tier1/keyvalues.h"
 #include "tier2/tier2.h"
 
 extern StudioMdlContext g_StudioMdlContext;
 
-// vphysics interfaces, loaded at runtime from vphysics.dll
 IPhysicsCollision  *physcollision = NULL;
 IPhysicsSurfaceProps *physprops   = NULL;
 
@@ -139,6 +139,16 @@ public:
 	CUtlVector<char>     m_textCommands;
 	CUtlVector<mergelist_t> m_mergeList;
 
+	// Per-joint override values stored during QC parsing (before bones are built)
+	struct joint_override_t {
+		char  name[128];
+		float massBias;
+		float damping;
+		float rotdamping;
+		float inertia;
+	};
+	CUtlVector<joint_override_t> m_pendingJointOverrides;
+
 	float m_flFrictionTimeIn;
 	float m_flFrictionTimeOut;
 	float m_flFrictionTimeHold;
@@ -180,6 +190,7 @@ public:
 	void JointRotdamping( const char *pJointName, float rotdamping );
 	void JointInertia( const char *pJointName, float inertia );
 	void JointMassBias( const char *pJointName, float massBias );
+	void ApplyPendingJointOverrides();
 
 	void FixBoneList();
 	const char *FixParent( const char *pParentName );
@@ -489,29 +500,59 @@ CPhysCollisionModel *CJointedModel::InitCollisionModel( const char *pJointName )
 	return pModel;
 }
 
+// Helper: find or create a pending-override entry for a named joint
+static CJointedModel::joint_override_t *FindOrAddOverride( CUtlVector<CJointedModel::joint_override_t> &list, const char *pName )
+{
+	for ( int i = 0; i < list.Count(); i++ )
+		if ( !stricmp( list[i].name, pName ) ) return &list[i];
+	CJointedModel::joint_override_t o;
+	V_strncpy( o.name, pName, sizeof(o.name) );
+	o.massBias = -1.0f; o.damping = -1.0f; o.rotdamping = -1.0f; o.inertia = -1.0f;
+	list.AddToTail( o );
+	return &list[ list.Count() - 1 ];
+}
+
 void CJointedModel::JointDamping( const char *pJointName, float damping )
 {
 	CPhysCollisionModel *pModel = GetCollisionModel( pJointName );
-	if ( !pModel ) { int idx = FindLocalBoneNamed(pJointName); if (idx<0) return; pModel = InitCollisionModel(pJointName); pModel->m_name = m_pModel->localBone[idx].name; AppendCollisionModel(pModel); }
-	pModel->m_damping = damping;
+	if ( pModel ) { pModel->m_damping = damping; return; }
+	FindOrAddOverride( m_pendingJointOverrides, pJointName )->damping = damping;
 }
 
 void CJointedModel::JointRotdamping( const char *pJointName, float rotdamping )
 {
 	CPhysCollisionModel *pModel = GetCollisionModel( pJointName );
-	if ( pModel ) pModel->m_rotdamping = rotdamping;
+	if ( pModel ) { pModel->m_rotdamping = rotdamping; return; }
+	FindOrAddOverride( m_pendingJointOverrides, pJointName )->rotdamping = rotdamping;
 }
 
 void CJointedModel::JointInertia( const char *pJointName, float inertia )
 {
 	CPhysCollisionModel *pModel = GetCollisionModel( pJointName );
-	if ( pModel ) pModel->m_inertia = inertia;
+	if ( pModel ) { pModel->m_inertia = inertia; return; }
+	FindOrAddOverride( m_pendingJointOverrides, pJointName )->inertia = inertia;
 }
 
 void CJointedModel::JointMassBias( const char *pJointName, float massBias )
 {
 	CPhysCollisionModel *pModel = GetCollisionModel( pJointName );
-	if ( pModel ) pModel->m_massBias = massBias;
+	if ( pModel ) { pModel->m_massBias = massBias; return; }
+	FindOrAddOverride( m_pendingJointOverrides, pJointName )->massBias = massBias;
+}
+
+void CJointedModel::ApplyPendingJointOverrides()
+{
+	for ( int i = 0; i < m_pendingJointOverrides.Count(); i++ )
+	{
+		const joint_override_t &o = m_pendingJointOverrides[i];
+		CPhysCollisionModel *pModel = GetCollisionModel( o.name );
+		if ( !pModel ) continue;
+		if ( o.massBias   >= 0.0f ) pModel->m_massBias   = o.massBias;
+		if ( o.damping    >= 0.0f ) pModel->m_damping    = o.damping;
+		if ( o.rotdamping >= 0.0f ) pModel->m_rotdamping = o.rotdamping;
+		if ( o.inertia    >= 0.0f ) pModel->m_inertia    = o.inertia;
+	}
+	m_pendingJointOverrides.RemoveAll();
 }
 
 void CJointedModel::AddConvexSrc( const char *szFileName )
@@ -522,7 +563,7 @@ void CJointedModel::AddConvexSrc( const char *szFileName )
 		{
 			int nummaterials = g_nummaterials;
 			int numtextures  = g_numtextures;
-			s_source_t *pmodel = Load_Source( szFileName, "SMD", false, false, false );
+			s_source_t *pmodel = Load_Source( szFileName, "", false, false, false );
 			if ( !pmodel ) return;
 			if ( nummaterials && numtextures && (numtextures != g_numtextures || nummaterials != g_nummaterials) )
 			{
@@ -961,6 +1002,38 @@ int CJointedModel::ProcessSingleBody()
 	CUtlVector<Vector>        allworldspaceVerts;
 	bool bValid = true;
 
+	// --- DEBUG: dump first few vertices + bone info from the collision source ---
+	if ( m_pModel )
+	{
+		printf( "[COLLDEBUG] source: %s  numverts=%d  numbones=%d  globalverts=%d\n",
+		        m_pModel->filename, m_pModel->numvertices, m_pModel->numbones,
+		        m_pModel->m_GlobalVertices.Count() );
+		int nDump = (m_pModel->numvertices < 4) ? m_pModel->numvertices : 4;
+		for ( int _i = 0; _i < nDump; _i++ )
+		{
+			const s_boneweight_t &bw = m_pModel->vertex[_i].boneweight;
+			int lb = bw.numbones > 0 ? bw.bone[0] : 0;
+			int gb = m_pModel->boneLocalToGlobal[lb];
+			printf( "[COLLDEBUG]  v[%d] raw=(%.3f,%.3f,%.3f) localbone=%d globalbone=%d",
+			        _i, m_pModel->vertex[_i].position.x, m_pModel->vertex[_i].position.y, m_pModel->vertex[_i].position.z,
+			        lb, gb );
+			if ( m_pModel->m_GlobalVertices.Count() > _i )
+				printf( " global=(%.3f,%.3f,%.3f)", m_pModel->m_GlobalVertices[_i].position.x,
+				        m_pModel->m_GlobalVertices[_i].position.y, m_pModel->m_GlobalVertices[_i].position.z );
+			if ( gb >= 0 )
+				printf( " btp[0][3]=(%.3f,%.3f,%.3f)", g_bonetable[gb].boneToPose[0][3],
+				        g_bonetable[gb].boneToPose[1][3], g_bonetable[gb].boneToPose[2][3] );
+			printf( "\n" );
+		}
+		// boneToPose of local bone 0
+		if ( m_pModel->numbones > 0 )
+		{
+			printf( "[COLLDEBUG] source boneToPose[0] translation=(%.3f,%.3f,%.3f)\n",
+			        m_pModel->boneToPose[0][0][3], m_pModel->boneToPose[0][1][3], m_pModel->boneToPose[0][2][3] );
+		}
+	}
+	// --- END DEBUG ---
+
 	if ( pConcaveSrc && m_allowConcave )
 	{
 		CUtlVector<Vector> worldspaceVerts;
@@ -1172,7 +1245,7 @@ static void ParseCollisionCommands( CJointedModel &joints )
 			argCount = ReadArgs(args, 1);
 			CCmd_TotalMass( joints, args[0] );
 		}
-		else if ( !stricmp( command, "$automass" ) )
+		else if ( !stricmp( command, "$automass" ) || !stricmp( command, "$calculatemass" ) )
 		{
 			joints.SetAutoMass();
 		}
@@ -1415,41 +1488,13 @@ int DoCollisionModel( bool separateJoints )
 	if ( !GetToken(false) ) return 0;
 	strcpyn( name, token );
 
-	// Load vphysics.dll from beside the exe using standard LoadLibraryA (no LOAD_WITH_ALTERED_SEARCH_PATH)
-	// so Windows uses its normal search order for vphysics.dll's own dependencies (tier0.dll, vstdlib.dll, etc.)
-	char szVPhysicsPath[MAX_PATH];
-	GetModuleFileNameA( NULL, szVPhysicsPath, sizeof(szVPhysicsPath) );
-	char *pSep = strrchr( szVPhysicsPath, '\\' );
-	if ( !pSep ) pSep = strrchr( szVPhysicsPath, '/' );
-	if ( pSep ) strcpy( pSep + 1, "vphysics.dll" );
-	else        strcpy( szVPhysicsPath, "vphysics.dll" );
-
-	HMODULE hVPhysics = LoadLibraryA( szVPhysicsPath );
-	if ( !hVPhysics )
+	// Use built-in collision implementation - no external vphysics.dll required.
+	if ( !physcollision )
 	{
-		DWORD err = GetLastError();
-		if ( err == 193 ) // ERROR_BAD_EXE_FORMAT
-			MdlWarning( "vphysics.dll is the wrong architecture (32-bit DLL, 64-bit exe).\n"
-			            "Copy vphysics.dll, tier0.dll, vstdlib.dll from the game's bin/win64/ or bin/x64/ folder beside the exe.\n" );
-		else if ( err == 126 ) // ERROR_MOD_NOT_FOUND
-			MdlWarning( "vphysics.dll loaded but a dependency is missing (tier0.dll or vstdlib.dll).\n"
-			            "Copy all three from the game's bin/win64/ folder beside the exe.\n" );
-		else
-			MdlWarning( "vphysics.dll failed to load from '%s' (Windows error %lu).\n"
-			            "Copy vphysics.dll, tier0.dll, vstdlib.dll from the game's bin/win64/ folder beside the exe.\n",
-			            szVPhysicsPath, err );
-		return 0;
+		physcollision = CreateMiniPhysicsCollision();
+		physprops     = CreateMiniPhysicsSurfaceProps();
+		LoadSurfacePropsAll();
 	}
-	CreateInterfaceFn physicsFactory = reinterpret_cast<CreateInterfaceFn>( GetProcAddress( hVPhysics, "CreateInterface" ) );
-	if ( !physicsFactory )
-	{
-		MdlWarning( "vphysics.dll has no CreateInterface export - wrong DLL?\n" );
-		return 0;
-	}
-
-	physcollision = (IPhysicsCollision *)physicsFactory( VPHYSICS_COLLISION_INTERFACE_VERSION, NULL );
-	physprops      = (IPhysicsSurfaceProps *)physicsFactory( VPHYSICS_SURFACEPROPS_INTERFACE_VERSION, NULL );
-	LoadSurfacePropsAll();
 
 	int nummaterials = g_nummaterials;
 	int numtextures  = g_numtextures;
@@ -1460,7 +1505,7 @@ int DoCollisionModel( bool separateJoints )
 	}
 	else
 	{
-		s_source_t *pmodel = Load_Source( name, "SMD", false, false, false );
+		s_source_t *pmodel = Load_Source( name, "", false, false, false );
 		if ( !pmodel ) return 0;
 
 		if ( nummaterials && numtextures && (numtextures != g_numtextures || nummaterials != g_nummaterials) )
@@ -1499,6 +1544,7 @@ void CollisionModel_Build()
 		g_JointedModel.ProcessJointedModel();
 	else
 		g_JointedModel.ProcessSingleBody();
+	g_JointedModel.ApplyPendingJointOverrides();
 	g_JointedModel.FixCollisionHierarchy();
 	g_JointedModel.ComputeMass();
 }

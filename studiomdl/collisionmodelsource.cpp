@@ -87,11 +87,25 @@ bool CCollisionModelSource::FaceHasVertOnBone( const s_face_t &face, int boneInd
 
 void CCollisionModelSource::ConvertToWorldSpace( CUtlVector<Vector> &worldVerts, s_source_t *pSrc )
 {
-	// Vertex positions in an SMD are already in model/pose space (world space
-	// for the T-pose), so just copy them directly.
+	// Prefer the globally remapped positions from RemapVerticesToGlobalBones (m_GlobalVertices).
+	// These are in canonical model/pose space for both SMD and DMX sources regardless of
+	// whether the collision source's bind pose matches the main model's bind pose.
+	// Fall back to the raw loaded position only if remapping hasn't run yet.
 	worldVerts.SetCount( pSrc->numvertices );
+	bool bHaveGlobal = pSrc->m_GlobalVertices.Count() >= pSrc->numvertices;
+
+	// Apply transform: same operation BuildRawTransforms applies to root bone positions.
+	// Without this, the collision hull lives in raw source space.  
+	matrix3x4_t originXform;
+	AngleMatrix( pSrc->rotation, originXform );
+
 	for ( int i = 0; i < pSrc->numvertices; i++ )
-		worldVerts[i] = pSrc->vertex[i].position;
+	{
+		Vector rawPos = bHaveGlobal ? pSrc->m_GlobalVertices[i].position : pSrc->vertex[i].position;
+		Vector shifted;
+		VectorSubtract( rawPos, pSrc->adjust, shifted );
+		VectorRotate( shifted, originXform, worldVerts[i] );
+	}
 }
 
 void CCollisionModelSource::ConvertToBoneSpace( int boneIndex, CUtlVector<Vector> &boneVerts )
@@ -99,9 +113,7 @@ void CCollisionModelSource::ConvertToBoneSpace( int boneIndex, CUtlVector<Vector
 	// Transform from pose/world space to the local space of boneIndex.
 	// boneToPose maps bone-local -> pose; its inverse maps pose -> bone-local.
 	matrix3x4_t poseFromBone = m_pModel->boneToPose[boneIndex];
-	// Build inverse: for a rigid transform, inv = transpose(rot) with negated trans
 	matrix3x4_t bonePoseInv;
-	// MatrixInvert works for general 3x4 rigid transforms
 	MatrixInvert( poseFromBone, bonePoseInv );
 
 	boneVerts.SetCount( m_pModel->numvertices );
