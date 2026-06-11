@@ -66,5 +66,5 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 
 - Valve - Source Engine and SDK
 - [REDxEYE](https://github.com/REDxEYE) - base fork
-- [ficool2](https://github.com/ficool2) - StudioMDL++ fixes and ideas
-- [Starfelll](https://github.com/Starfelll) - NekoMDL fixes and ideas
+- [ficool2](https://github.com/ficool2) - StudioMDL++ (Ideas based on the features their studiomdl version provided)
+- [Starfelll](https://github.com/Starfelll) - NekoMDL
