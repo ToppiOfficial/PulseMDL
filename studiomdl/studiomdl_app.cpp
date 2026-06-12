@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *KITSUNE_MDL_VERSION = "0.1.1";
+static const char *KITSUNE_MDL_VERSION = "0.1.2";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -1055,9 +1055,11 @@ bool CStudioMDLApp::ParseArguments() {
 
     g_staticprop = false;
     g_centerstaticprop = false;
+    g_nosequence = false;
     g_bLegacyVTX = !CommandLine()->CheckParm("-newvtx");
     g_pStaticPropPoseSource = nullptr;
     g_nStaticPropPoseFrame = 0;
+    g_staticPropPoseFlexOverrides.RemoveAll();
 
     g_realignbones = false;
     g_constdirectionalightdot = 0;

@@ -1655,8 +1655,18 @@ void RemapAnimations() {
         s_animation_t *panim = g_panimation[i];
 
         s_source_t *psource = panim->source;
-        s_sourceanim_t *pSourceAnim = FindSourceAnim(psource, panim->animationname);
+        s_sourceanim_t *pSourceAnim = psource ? FindSourceAnim(psource, panim->animationname) : nullptr;
         int size = g_StudioMdlContext.numbones * sizeof(s_bone_t);
+
+        if (!pSourceAnim) {
+            // No matching animation in source (e.g. static prop with no sequence, or
+            // animation source that doesn't contain panim->animationname). Emit an
+            // identity frame so downstream code doesn't crash on a null pointer.
+            for (j = 0; j < panim->numframes; j++) {
+                panim->sanim[j] = (s_bone_t *) calloc(1, size);
+            }
+            continue;
+        }
 
         int n = panim->startframe - pSourceAnim->startframe;
         // printf("%s %d:%d\n", g_panimation[i]->filename, g_panimation[i]->startframe, pSourceAnim->startframe );
@@ -3565,8 +3575,6 @@ void CollapseBones() {
 //          collapses the skeleton.
 //-----------------------------------------------------------------------------
 static void ApplyStaticPropPose() {
-    // TODO: This still need some changes such as force collapsing to mimic $staticprop!
-
     s_source_t *pPoseSource = g_pStaticPropPoseSource;
 
     if (!pPoseSource || pPoseSource->m_Animations.Count() == 0) {
@@ -3582,16 +3590,18 @@ static void ApplyStaticPropPose() {
                    g_nStaticPropPoseFrame, pPoseAnim->numframes - 1);
     }
 
+    // Build target pose in scaled bone space so it matches vertex positions (scaled by g_currentscale).
     matrix3x4_t targetBoneToWorld[MAXSTUDIOSRCBONES];
-    BuildRawTransforms(pPoseSource, pPoseAnim->animationname, frame, targetBoneToWorld);
+    BuildRawTransforms(pPoseSource, pPoseAnim->animationname, frame,
+                       g_currentscale, Vector(0, 0, 0), RadianEuler(0, 0, 0), 0, targetBoneToWorld);
 
     for (int i = 0; i < g_numsources; i++) {
         s_source_t *psource = g_source[i];
         if (psource->numvertices == 0)
             continue;
 
-        // For each source bone, compute: skinMat = targetBoneToWorld[matchedPoseBone] * inverse(bindBoneToWorld)
-        // where bindBoneToWorld = psource->boneToPose[k] (bone-local -> bind pose world).
+        // skinMat[k] = targetBoneToWorld[matchedPoseBone] * inverse(scaledBoneToPose[k])
+        // boneToPose stores unscaled translations; scale them to match vertex space.
         matrix3x4_t skinMat[MAXSTUDIOSRCBONES];
         for (int k = 0; k < psource->numbones; k++) {
             int poseIdx = -1;
@@ -3609,8 +3619,15 @@ static void ApplyStaticPropPose() {
                 continue;
             }
 
+            // Scale boneToPose translations to match vertex-space scale.
+            matrix3x4_t scaledBind;
+            MatrixCopy(psource->boneToPose[k], scaledBind);
+            scaledBind[0][3] *= g_currentscale;
+            scaledBind[1][3] *= g_currentscale;
+            scaledBind[2][3] *= g_currentscale;
+
             matrix3x4_t invBind;
-            MatrixInvert(psource->boneToPose[k], invBind);
+            MatrixInvert(scaledBind, invBind);
             ConcatTransforms(targetBoneToWorld[poseIdx], invBind, skinMat[k]);
         }
 
@@ -3644,29 +3661,37 @@ static void ApplyStaticPropPose() {
         }
     }
 
-    // Rename root bone to "static_prop" and collapse the skeleton so all
-    // vertices are attached to a single root, matching $staticprop behaviour.
-    for (int i = 0; i < g_numsources; i++) {
-        s_source_t *psource = g_source[i];
-        if (psource->numvertices == 0)
-            continue;
+    // Bake flex overrides into vertex positions before the skeleton is collapsed.
+    for (int ov = 0; ov < g_staticPropPoseFlexOverrides.Count(); ov++) {
+        const char *pFlexName = g_staticPropPoseFlexOverrides[ov].name;
+        float value = clamp(g_staticPropPoseFlexOverrides[ov].value, 0.0f, 1.0f);
 
-        strcpy(psource->localBone[0].name, "static_prop");
-        psource->localBone[0].parent = -1;
-        SetIdentityMatrix(psource->boneToPose[0]);
+        bool found = false;
+        for (int i = 0; i < g_numsources; i++) {
+            s_source_t *psource = g_source[i];
+            s_sourceanim_t *pFlexAnim = FindSourceAnim(psource, pFlexName);
+            if (!pFlexAnim || pFlexAnim->numvanims[0] == 0 || !pFlexAnim->vanim[0])
+                continue;
 
-        for (int k = 1; k < psource->numbones; k++) {
-            psource->localBone[k].parent = -1;
-        }
-
-        for (int j = 0; j < psource->numvertices; j++) {
-            for (int k = 0; k < psource->vertex[j].boneweight.numbones; k++) {
-                psource->vertex[j].boneweight.bone[k] = 0;
+            found = true;
+            for (int k = 0; k < pFlexAnim->numvanims[0]; k++) {
+                const s_vertanim_t &va = pFlexAnim->vanim[0][k];
+                if (va.vertex < 0 || va.vertex >= psource->numvertices)
+                    continue;
+                VectorMA(psource->vertex[va.vertex].position, value, va.pos, psource->vertex[va.vertex].position);
+                Vector newNormal;
+                VectorMA(psource->vertex[va.vertex].normal, value, va.normal, newNormal);
+                if (newNormal.LengthSqr() > 0.0f) {
+                    VectorNormalize(newNormal);
+                    psource->vertex[va.vertex].normal = newNormal;
+                }
             }
         }
-    }
 
-    g_numattachments = 0;
+        if (!found) {
+            MdlWarning("$staticproppose flex '%s': no source animation found, skipping\n", pFlexName);
+        }
+    }
 }
 
 
@@ -3780,6 +3805,21 @@ void MakeStaticProp() {
     Q_strncpy(g_panimation[0]->animationname, "BindPose", sizeof(g_panimation[0]->animationname));
     g_panimation[0]->rotation = RadianEuler(0, 0, 0);
     g_panimation[0]->adjust = Vector(0, 0, 0);
+
+    // If the animation source (e.g. from $staticproppose/$sequence pointing to a pose file)
+    // doesn't have a "BindPose" entry, rename its first animation so RemapAnimations() can
+    // find it via the name we just set above. The pose was already baked into vertices by
+    // ApplyStaticPropPose(), so the content doesn't matter - only the name lookup matters.
+    if (g_panimation[0]->source) {
+        s_source_t *pAnimSrc = g_panimation[0]->source;
+        if (!FindSourceAnim(pAnimSrc, "BindPose") && pAnimSrc->m_Animations.Count() > 0) {
+            s_sourceanim_t *pFirstAnim = &pAnimSrc->m_Animations[0];
+            Q_strncpy(pFirstAnim->animationname, "BindPose", sizeof(pFirstAnim->animationname));
+            pFirstAnim->numframes = 1;
+            pFirstAnim->startframe = 0;
+            pFirstAnim->endframe = 1;
+        }
+    }
 
     // throw away all vertex animations
     g_numflexkeys = 0;
@@ -8279,7 +8319,42 @@ void SetIlluminationPosition() {
     }
 }
 
+s_sequence_t *ProcessCmdSequence(const char *pSequenceName);
+s_animation_t *ProcessImpliedAnimation(s_sequence_t *psequence, const char *filename);
+void ProcessSequence(s_sequence_t *pseq, int numblends, s_animation_t **animations, bool isAppend);
+
+// Injects a single BindPose sequence so the model passes the "no sequences" check.
+// Uses the pose source (for $staticproppose) or the first body source.
+static void InjectDummyBindPoseSequence() {
+    s_source_t *pSrc = g_pStaticPropPoseSource
+        ? g_pStaticPropPoseSource
+        : (g_numsources > 0 ? g_source[0] : nullptr);
+
+    if (!pSrc || pSrc->m_Animations.Count() == 0) {
+        MdlError("$nosequence: no loaded source with animations to create a BindPose sequence\n");
+        return;
+    }
+
+    s_sequence_t *pseq = ProcessCmdSequence("BindPose");
+    if (!pseq) {
+        MdlError("$nosequence: failed to create BindPose sequence\n");
+        return;
+    }
+
+    s_animation_t *animations[1];
+    animations[0] = ProcessImpliedAnimation(pseq, pSrc->filename);
+    ProcessSequence(pseq, 1, animations, false);
+}
+
 void SimplifyModel() {
+    if (g_nosequence) {
+        if (g_sequence.Count() > 0) {
+            MdlWarning("$nosequence ignored - model already has %d sequence(s)\n", g_sequence.Count());
+        } else if (g_numincludemodels == 0) {
+            InjectDummyBindPoseSequence();
+        }
+    }
+
     if (g_sequence.Count() == 0 && g_numincludemodels == 0) {
         MdlError("model has no sequences\n");
     }

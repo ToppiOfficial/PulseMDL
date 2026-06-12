@@ -1009,6 +1009,12 @@ void FindOrAddFlexController(
     strcpyn(g_flexcontroller[g_numflexcontrollers].type, pszFlexControllerType);
     g_flexcontroller[g_numflexcontrollers].min = flMin;
     g_flexcontroller[g_numflexcontrollers].max = flMax;
+
+    if (!g_StudioMdlContext.quiet) {
+        printf("flex controller  %-32s [%s] %.3f..%.3f\n",
+               pszFlexControllerName, pszFlexControllerType, flMin, flMax);
+    }
+
     g_numflexcontrollers++;
 }
 
@@ -1026,19 +1032,16 @@ bool PopMemoryScript();
 void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) {
     CDmrElementArray<CDmElement> targets = pCombination->GetAttribute("targets");
 
-    // See if all targets of the DmeCombinationOperator are DmeFlexRules
-    // If so implement controllers & flexes from flex rules, if not do old
-    // behavior
-    bool bFlexRules = true;
+    bool bFlexRules = false;
     for (int i = 0; i < targets.Count(); ++i) {
-        if (!CastElement<CDmeFlexRules>(targets[i])) {
-            bFlexRules = false;
+        if (CastElement<CDmeFlexRules>(targets[i])) {
+            bFlexRules = true;
             break;
         }
     }
 
     if (bFlexRules) {
-        // Add a controller for each control in the combintion operator
+        // Add a controller for each control in the combination operator
         CDmAttribute *pControlsAttr = pCombination->GetAttribute("controls");
         if (pControlsAttr) {
             CDmrElementArrayConst<CDmElement> controlsAttr(pControlsAttr);
@@ -1053,12 +1056,94 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
                 flMin = pControlElement->GetValue("flexMin", flMin);
                 flMax = pControlElement->GetValue("flexMax", flMax);
 
-                FindOrAddFlexController(pControlElement->GetName(), "default", flMin, flMax);
+                const char *pszFlexGroup = pControlElement->GetValueString("flexgroup");
+                if (!pszFlexGroup || !pszFlexGroup[0])
+                    pszFlexGroup = "default";
+                FindOrAddFlexController(pControlElement->GetName(), pszFlexGroup, flMin, flMax);
             }
         }
 
         CUtlString sOldToken = token;
         CUtlString sTmpBuf;
+
+        // %otherRule cross-references within the same CDmeFlexRules resolve correctly.
+        for (int i = 0; i < targets.Count(); ++i) {
+            CDmeFlexRules *pDmeFlexRules = CastElement<CDmeFlexRules>(targets[i]);
+            if (!pDmeFlexRules)
+                continue;
+            for (int j = 0; j < pDmeFlexRules->GetRuleCount(); ++j) {
+                CDmeFlexRuleBase *pRule = pDmeFlexRules->GetRule(j);
+                if (pRule)
+                    Add_Flexdesc(pRule->GetName());
+            }
+        }
+
+        // scan CDmeFlexRuleExpression strings for %name tokens and
+        // register only those delta shapes that exist in the source. This lets
+        // DMX-internal deltas (never declared in QC) be referenced via %name,
+        // while unreferenced delta shapes are not pulled in.
+        for (int i = 0; i < targets.Count(); ++i) {
+            CDmeFlexRules *pDmeFlexRules = CastElement<CDmeFlexRules>(targets[i]);
+            if (!pDmeFlexRules)
+                continue;
+            for (int j = 0; j < pDmeFlexRules->GetRuleCount(); ++j) {
+                CDmeFlexRuleExpression *pExpr = CastElement<CDmeFlexRuleExpression>(pDmeFlexRules->GetRule(j));
+                if (!pExpr)
+                    continue;
+                const char *p = pExpr->GetExpression();
+                while (p && *p) {
+                    if (*p++ != '%')
+                        continue;
+                    const char *pStart = p;
+                    while (*p && (V_isalnum((unsigned char)*p) || *p == '_'))
+                        p++;
+                    if (p == pStart)
+                        continue;
+                    char szName[MAX_PATH];
+                    int nLen = min((int)(p - pStart), (int)sizeof(szName) - 1);
+                    V_strncpy(szName, pStart, nLen + 1);
+
+                    if (FindSourceFlexKey(pSource, szName) >= 0) {
+                        // delta exists in this DMX source - register it
+                        Add_Flexdesc(szName);
+                    } else {
+                        // check if it's a local var rule within any CDmeFlexRules target
+                        bool bIsLocalVar = false;
+                        for (int t = 0; t < targets.Count() && !bIsLocalVar; ++t) {
+                            CDmeFlexRules *pFR = CastElement<CDmeFlexRules>(targets[t]);
+                            if (!pFR)
+                                continue;
+                            for (int r = 0; r < pFR->GetRuleCount(); ++r) {
+                                CDmeFlexRuleBase *pRule = pFR->GetRule(r);
+                                if (pRule && stricmp(pRule->GetName(), szName) == 0) {
+                                    bIsLocalVar = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (bIsLocalVar) {
+                            // cross-reference to another rule in this block, resolves fine
+                        } else {
+                            // not in DMX - check if QC already declared it
+                            bool bInQC = false;
+                            for (int k = 0; k < g_numflexdesc; k++) {
+                                if (stricmp(g_flexdesc[k].FACS, szName) == 0) {
+                                    bInQC = true;
+                                    break;
+                                }
+                            }
+                            if (bInQC) {
+                                MdlWarning("DMX flex rule '%s': %%%s resolved from QC, not from DMX delta shapes\n",
+                                           pExpr->GetName(), szName);
+                            } else {
+                                MdlWarning("DMX flex rule '%s': %%%s not found in DMX delta shapes or QC - compile will fail\n",
+                                           pExpr->GetName(), szName);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         for (int i = 0; i < targets.Count(); ++i) {
             CDmeFlexRules *pDmeFlexRules = CastElement<CDmeFlexRules>(targets[i]);
@@ -1079,7 +1164,36 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
                 } else if (CastElement<CDmeFlexRuleExpression>(pDmeFlexRule)) {
                     CDmeFlexRuleExpression *pDmeFlexRuleExpression = CastElement<CDmeFlexRuleExpression>(pDmeFlexRule);
 
-                    sTmpBuf += pDmeFlexRuleExpression->GetExpression();
+                    // substitute $varname$ tokens with QC/CLI variable values
+                    const char *pExprStr = pDmeFlexRuleExpression->GetExpression();
+                    CUtlString sExpanded;
+                    const char *p = pExprStr;
+                    while (p && *p) {
+                        if (*p != '$') {
+                            sExpanded += *p++;
+                            continue;
+                        }
+                        const char *pVarStart = p + 1;
+                        const char *pVarEnd = strchr(pVarStart, '$');
+                        if (!pVarEnd) {
+                            // no closing $, emit literally
+                            sExpanded += *p++;
+                            continue;
+                        }
+                        char szVarName[256];
+                        int nLen = min((int)(pVarEnd - pVarStart), (int)sizeof(szVarName) - 1);
+                        V_strncpy(szVarName, pVarStart, nLen + 1);
+                        const char *pVarValue = LookupVariableValue(szVarName);
+                        if (pVarValue) {
+                            sExpanded += pVarValue;
+                        } else {
+                            MdlError("DMX flex rule '%s': $%s$ is not defined\n",
+                                     pDmeFlexRule->GetName(), szVarName);
+                            return;
+                        }
+                        p = pVarEnd + 1;
+                    }
+                    sTmpBuf += sExpanded;
                 } else if (CastElement<CDmeFlexRuleLocalVar>(pDmeFlexRule)) {
                     bFlexRule = false;
                 } else {
@@ -1090,8 +1204,7 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
 
                 PushMemoryScript(sTmpBuf.Get(), sTmpBuf.Length());
 
-                Add_Flexdesc(pDmeFlexRule->GetName());
-
+                // flexdesc for this rule was already registered
                 if (bFlexRule) {
                     Option_Flexrule(NULL, pDmeFlexRule->GetName());
                 }

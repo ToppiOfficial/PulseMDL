@@ -811,6 +811,10 @@ void AddFlexControllers(
                         pController->min = 0.0f;
                         pController->max = 1.0f;
                     }
+                    if (!g_StudioMdlContext.quiet) {
+                        printf("flex controller  %-32s [%s] %.3f..%.3f\n",
+                               pController->name, pController->type, pController->min, pController->max);
+                    }
                 }
             }
 
@@ -836,6 +840,10 @@ void AddFlexControllers(
                     } else {
                         pController->min = 0.0f;
                         pController->max = 1.0f;
+                    }
+                    if (!g_StudioMdlContext.quiet) {
+                        printf("flex controller  %-32s [%s] %.3f..%.3f\n",
+                               pController->name, pController->type, pController->min, pController->max);
                     }
                 }
             }
@@ -867,6 +875,10 @@ void AddFlexControllers(
                         pController->min = 0.0f;
                         pController->max = 1.0f;
                     }
+                    if (!g_StudioMdlContext.quiet) {
+                        printf("flex controller  %-32s [%s] %.3f..%.3f\n",
+                               pController->name, pController->type, pController->min, pController->max);
+                    }
                 }
             }
         }
@@ -894,6 +906,10 @@ void AddFlexControllers(
                 Q_strncpy(pController->type, pTemp, sizeof(pController->type));
                 pController->min = -1.0f;
                 pController->max = 1.0f;
+                if (!g_StudioMdlContext.quiet) {
+                    printf("flex controller  %-32s [%s] %.3f..%.3f\n",
+                           pController->name, pController->type, pController->min, pController->max);
+                }
             }
         }
 
@@ -914,6 +930,10 @@ void AddFlexControllers(
                 Q_strncpy(pController->type, "blink", sizeof(pController->type));
                 pController->min = 0.0f;
                 pController->max = 1.0f;
+                if (!g_StudioMdlContext.quiet) {
+                    printf("flex controller  %-32s [%s] %.3f..%.3f\n",
+                           pController->name, pController->type, pController->min, pController->max);
+                }
             }
         }
     }
@@ -1513,6 +1533,10 @@ void Option_Flexcontroller(s_model_t *pmodel) {
                 strcpyn(g_flexcontroller[g_numflexcontrollers].type, type);
                 g_flexcontroller[g_numflexcontrollers].min = range_min;
                 g_flexcontroller[g_numflexcontrollers].max = range_max;
+                if (!g_StudioMdlContext.quiet) {
+                    printf("flex controller  %-32s [%s] %.3f..%.3f\n",
+                           token, type, range_min, range_max);
+                }
                 g_numflexcontrollers++;
             }
         }
@@ -4480,15 +4504,59 @@ void Cmd_StaticPropPose() {
     }
 
     GetToken(false);
-    s_source_t *pSource = Load_Source(token, "", false, false);
-    if (!pSource) {
-        MdlError("$staticproppose: failed to load animation source '%s'\n", token);
-        return;
+
+    if (token[0] == '{') {
+        // block form: $staticproppose { pose <file> <frame>  flex <name> [<value>] ... }
+        while (GetToken(true)) {
+            if (token[0] == '}')
+                break;
+
+            if (!Q_stricmp(token, "pose")) {
+                GetToken(false);
+                s_source_t *pSource = Load_Source(token, "", false, false);
+                if (!pSource) {
+                    MdlError("$staticproppose: failed to load pose source '%s'\n", token);
+                    return;
+                }
+                GetToken(false);
+                g_pStaticPropPoseSource = pSource;
+                g_nStaticPropPoseFrame = atoi(token);
+            } else if (!Q_stricmp(token, "flex")) {
+                s_staticPropPoseFlexOverride_t ov;
+                GetToken(false);
+                Q_strncpy(ov.name, token, sizeof(ov.name));
+                ov.value = 1.0f;
+                if (TokenAvailable()) {
+                    GetToken(false);
+                    ov.value = (float) verify_atof(token);
+                }
+                g_staticPropPoseFlexOverrides.AddToTail(ov);
+            } else {
+                MdlWarning("$staticproppose: unknown token '%s', ignoring\n", token);
+            }
+        }
+
+        if (!g_pStaticPropPoseSource) {
+            MdlError("$staticproppose: block form requires a 'pose' line\n");
+            return;
+        }
+    } else {
+        // inline form: $staticproppose <file> <frame>
+        s_source_t *pSource = Load_Source(token, "", false, false);
+        if (!pSource) {
+            MdlError("$staticproppose: failed to load pose source '%s'\n", token);
+            return;
+        }
+        GetToken(false);
+        g_pStaticPropPoseSource = pSource;
+        g_nStaticPropPoseFrame = atoi(token);
     }
 
-    GetToken(false);
-    g_pStaticPropPoseSource = pSource;
-    g_nStaticPropPoseFrame = atoi(token);
+    ProcessStaticProp();
+}
+
+void Cmd_NoSequence() {
+    g_nosequence = true;
 }
 
 void Cmd_ZBrush() {
@@ -8321,6 +8389,7 @@ MDLCommand_t g_Commands[] =
                 {"$calctransitions",                 Cmd_CalcTransitions,},
                 {"$staticprop",                      Cmd_StaticProp,},
                 {"$staticproppose",                  Cmd_StaticPropPose,},
+                {"$nosequence",                      Cmd_NoSequence,},
                 {"$zbrush",                          Cmd_ZBrush,},
                 {"$realignbones",                    Cmd_RealignBones,},
                 {"$forcerealign",                    Cmd_ForceRealign,},

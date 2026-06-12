@@ -1002,37 +1002,6 @@ int CJointedModel::ProcessSingleBody()
 	CUtlVector<Vector>        allworldspaceVerts;
 	bool bValid = true;
 
-	// --- DEBUG: dump first few vertices + bone info from the collision source ---
-	if ( m_pModel )
-	{
-		printf( "[COLLDEBUG] source: %s  numverts=%d  numbones=%d  globalverts=%d\n",
-		        m_pModel->filename, m_pModel->numvertices, m_pModel->numbones,
-		        m_pModel->m_GlobalVertices.Count() );
-		int nDump = (m_pModel->numvertices < 4) ? m_pModel->numvertices : 4;
-		for ( int _i = 0; _i < nDump; _i++ )
-		{
-			const s_boneweight_t &bw = m_pModel->vertex[_i].boneweight;
-			int lb = bw.numbones > 0 ? bw.bone[0] : 0;
-			int gb = m_pModel->boneLocalToGlobal[lb];
-			printf( "[COLLDEBUG]  v[%d] raw=(%.3f,%.3f,%.3f) localbone=%d globalbone=%d",
-			        _i, m_pModel->vertex[_i].position.x, m_pModel->vertex[_i].position.y, m_pModel->vertex[_i].position.z,
-			        lb, gb );
-			if ( m_pModel->m_GlobalVertices.Count() > _i )
-				printf( " global=(%.3f,%.3f,%.3f)", m_pModel->m_GlobalVertices[_i].position.x,
-				        m_pModel->m_GlobalVertices[_i].position.y, m_pModel->m_GlobalVertices[_i].position.z );
-			if ( gb >= 0 )
-				printf( " btp[0][3]=(%.3f,%.3f,%.3f)", g_bonetable[gb].boneToPose[0][3],
-				        g_bonetable[gb].boneToPose[1][3], g_bonetable[gb].boneToPose[2][3] );
-			printf( "\n" );
-		}
-		// boneToPose of local bone 0
-		if ( m_pModel->numbones > 0 )
-		{
-			printf( "[COLLDEBUG] source boneToPose[0] translation=(%.3f,%.3f,%.3f)\n",
-			        m_pModel->boneToPose[0][0][3], m_pModel->boneToPose[0][1][3], m_pModel->boneToPose[0][2][3] );
-		}
-	}
-	// --- END DEBUG ---
 
 	if ( pConcaveSrc && m_allowConcave )
 	{

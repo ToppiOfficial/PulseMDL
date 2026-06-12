@@ -120,6 +120,7 @@ EXTERN    bool g_bboxonlyverts;
 EXTERN    int clip_texcoords;
 EXTERN    bool g_staticprop;
 EXTERN    bool g_centerstaticprop;
+EXTERN    bool g_nosequence;
 EXTERN    bool g_bLegacyVTX;
 
 EXTERN    bool g_realignbones;
@@ -1028,6 +1029,12 @@ EXTERN s_source_t *g_source[MAXSTUDIOSEQUENCES];
 
 EXTERN s_source_t *g_pStaticPropPoseSource;
 EXTERN int g_nStaticPropPoseFrame;
+
+struct s_staticPropPoseFlexOverride_t {
+    char name[MAXSTUDIONAME];
+    float value;
+};
+EXTERN CUtlVector<s_staticPropPoseFlexOverride_t> g_staticPropPoseFlexOverrides;
 
 struct s_eyeball_t {
     char name[MAXSTUDIONAME];

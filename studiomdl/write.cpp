@@ -2342,7 +2342,6 @@ static void WriteModel(studiohdr_t *phdr) {
     ALIGN4(pData);
 
     for (j = 0; j < g_numflexdesc; j++) {
-        // printf("%d %s\n", j, g_flexdesc[j].FACS );
         AddToStringTable(pflexdesc, &pflexdesc->szFACSindex, g_flexdesc[j].FACS);
         pflexdesc++;
     }
@@ -2361,6 +2360,9 @@ static void WriteModel(studiohdr_t *phdr) {
         pflexcontroller->max = g_flexcontroller[j].max;
         pflexcontroller->localToGlobal = -1;
         pflexcontroller++;
+    }
+    if (!g_StudioMdlContext.quiet) {
+        printf("flexcontrollers  %7lld bytes (%d)\n", (long long)(g_numflexcontrollers * sizeof(mstudioflexcontroller_t)), g_numflexcontrollers);
     }
 
     // write flex rules
@@ -2386,6 +2388,9 @@ static void WriteModel(studiohdr_t *phdr) {
         ALIGN4(pData);
 
         pflexrule++;
+    }
+    if (!g_StudioMdlContext.quiet) {
+        printf("flexrules        %7d rules  (%d descs)\n", g_numflexrules, g_numflexdesc);
     }
 
     // write global flex controller information
@@ -2950,6 +2955,18 @@ void WriteKeyValues(studiohdr_t *phdr, std::vector<char> *pKeyValue) {
     ALIGN4(pData);
 }
 
+// void WriteQCPath() {
+//     char relative_qc_path[1024] = {};
+//     g_pFullFileSystem->FullPathToRelativePathEx(qdir, "CONTENT", relative_qc_path, sizeof(relative_qc_path));
+//     strcat(relative_qc_path, V_GetFileName(g_fullpath));
+//
+//     if (Q_strlen(relative_qc_path) > 0) {
+//         char new_qcpath_block[2048];
+//         V_sprintf_safe(new_qcpath_block, "qc_path {\n\"value\" \"%s\" }\n", relative_qc_path);
+//         g_StudioMdlContext.KeyValueText.insert(g_StudioMdlContext.KeyValueText.end(), new_qcpath_block,
+//                                                new_qcpath_block + std::strlen(new_qcpath_block));
+//     }
+// }
 
 void CapKeyValues() {
     const char *headCap = "mdlkeyvalue\n{\n";
@@ -2962,18 +2979,7 @@ void CapKeyValues() {
     }
 }
 
-void WriteQCPath() {
-    char relative_qc_path[1024] = {};
-    g_pFullFileSystem->FullPathToRelativePathEx(qdir, "CONTENT", relative_qc_path, sizeof(relative_qc_path));
-    strcat(relative_qc_path, V_GetFileName(g_fullpath));
 
-    if (Q_strlen(relative_qc_path) > 0) {
-        char new_qcpath_block[2048];
-        V_sprintf_safe(new_qcpath_block, "qc_path {\n\"value\" \"%s\" }\n", relative_qc_path);
-        g_StudioMdlContext.KeyValueText.insert(g_StudioMdlContext.KeyValueText.end(), new_qcpath_block,
-                                               new_qcpath_block + std::strlen(new_qcpath_block));
-    }
-}
 
 void WriteSeqKeyValues(mstudioseqdesc_t *pseqdesc, std::vector<char> *pKeyValue) {
     pseqdesc->keyvalueindex = (pData - (byte *) pseqdesc);
@@ -3187,8 +3193,7 @@ void WriteModelFiles() {
     }
     total = pData - pStart;
 
-    WriteQCPath();
-
+    // WriteQCPath();
     CapKeyValues();
 
     WriteKeyValues(phdr, &g_StudioMdlContext.KeyValueText);
