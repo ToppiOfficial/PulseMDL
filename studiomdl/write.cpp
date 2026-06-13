@@ -351,45 +351,6 @@ static void WriteBoneInfo(studiohdr_t *phdr) {
         ALIGN4(pData);
     }
 
-    // Write twist bones
-#if 0 // DISABLED IN CSGO
-                                                                                                                            if ( g_twistbones.Count() > 0 )
-	{
-		mstudiotwistbone_t *pProc = (mstudiotwistbone_t *)pData;
-		pData += g_twistbones.Count() * sizeof( mstudiotwistbone_t );
-		ALIGN4( pData );
-
-		for ( i = 0; i < g_twistbones.Count(); ++i )
-		{
-			const CTwistBone &twistBone = g_twistbones[i];
-			pProc[i].m_bInverse = twistBone.m_bInverse;
-			pProc[i].m_vUpVector = twistBone.m_vUpVector;
-			pProc[i].m_nParentBone = twistBone.m_nParentBone;
-			QuaternionInvert( twistBone.m_qBaseRotation, pProc[i].m_qBaseInv );
-			pProc[i].m_nChildBone = twistBone.m_nChildBone;
-
-			mstudiotwistbonetarget_t *pTarget = (mstudiotwistbonetarget_t *)pData;
-			pProc[i].m_nTargetCount = twistBone.m_twistBoneTargets.Count();
-			pProc[i].m_nTargetIndex = (byte *)pTarget - (byte *)&pProc[i];
-			pData += twistBone.m_twistBoneTargets.Count() * sizeof( mstudiotwistbone_t );
-			ALIGN4( pData );
-
-			for ( j = 0; j < twistBone.m_twistBoneTargets.Count(); ++j )
-			{
-				const s_constraintbonetarget_t &twistBoneTarget = twistBone.m_twistBoneTargets[j];
-
-				k = twistBoneTarget.m_nBone;
-				pTarget[j].m_nBone = k;
-				pTarget[j].m_flWeight = twistBoneTarget.m_flWeight;
-				pTarget[j].m_vBaseTranslate = twistBoneTarget.m_vOffset;
-				pTarget[j].m_qBaseRotation = twistBoneTarget.m_qOffset;
-
-				pbone[k].procindex = (byte *)&pProc[i] - (byte *)&pbone[k];
-				pbone[k].proctype = j == 0 ? STUDIO_PROC_TWIST_MASTER : STUDIO_PROC_TWIST_SLAVE;
-			}
-		}
-	}
-#endif
 
     // Write constraint bones
     if (g_constraintBones.Count() > 0) {
@@ -1370,27 +1331,8 @@ byte *WriteIkErrors(s_animation_t *srcanim, byte *pData) {
             pikrule->contact = 0.0f;
         }
 
-        /*
-		printf("%d %d %d %d : %.2f %.2f %.2f %.2f\n",
-			srcanim->ikrule[j].start, srcanim->ikrule[j].peak, srcanim->ikrule[j].tail, srcanim->ikrule[j].end,
-			pikrule->start, pikrule->peak, pikrule->tail, pikrule->end );
-		*/
-
         pikrule->iStart = srcanim->ikrule[j].start;
 
-#if 0
-                                                                                                                                // uncompressed
-		pikrule->ikerrorindex = (pData - (byte*)pikrule);
-		mstudioikerror_t *perror = (mstudioikerror_t *)pData;
-		pData += srcanim->ikrule[j].numerror * sizeof( *perror );
-
-		for (k = 0; k < srcanim->ikrule[j].numerror; k++)
-		{
-			perror[k].pos = srcanim->ikrule[j].pError[k].pos;
-			perror[k].q = srcanim->ikrule[j].pError[k].q;
-		}
-#endif
-#if 1
         // skip writting the header if there's no IK data
         for (k = 0; k < 6; k++) {
             if (srcanim->ikrule[j].errorData.numanim[k]) break;
@@ -1421,9 +1363,6 @@ byte *WriteIkErrors(s_animation_t *srcanim, byte *pData) {
         }
 
         ALIGN4(pData);
-
-#endif
-        // AddToStringTable( pikrule, &pikrule->szattachmentindex, srcanim->ikrule[j].attachment );
     }
 
     return pData;
@@ -1458,19 +1397,6 @@ byte *WriteLocalHierarchy(s_animation_t *srcanim, byte *pData) {
 
         pHierarchy->iStart = srcanim->localhierarchy[j].start;
 
-#if 0
-                                                                                                                                // uncompressed
-		pHierarchy->ikerrorindex = (pData - (byte*)pHierarchy);
-		mstudioikerror_t *perror = (mstudioikerror_t *)pData;
-		pData += srcanim->ikrule[j].numerror * sizeof( *perror );
-
-		for (k = 0; k < srcanim->ikrule[j].numerror; k++)
-		{
-			perror[k].pos = srcanim->ikrule[j].pError[k].pos;
-			perror[k].q = srcanim->ikrule[j].pError[k].q;
-		}
-#endif
-#if 1
         // skip writting the header if there's no IK data
         for (k = 0; k < 6; k++) {
             if (srcanim->localhierarchy[j].localData.numanim[k]) break;
@@ -1493,9 +1419,6 @@ byte *WriteLocalHierarchy(s_animation_t *srcanim, byte *pData) {
         }
 
         ALIGN4(pData);
-
-#endif
-        // AddToStringTable( pHierarchy, &pHierarchy->szattachmentindex, srcanim->ikrule[j].attachment );
     }
 
     return pData;
@@ -4408,30 +4331,6 @@ bool Clamp_MDL_LODS(const char *fileName, int rootLOD) {
     len = LoadFile((char *) fileName, (void **) &pStudioHdr);
 
     Studio_SetRootLOD(pStudioHdr, rootLOD);
-
-#if 0
-                                                                                                                            // shift down bone LOD masks
-	int iBone;
-	for ( iBone = 0; iBone < pStudioHdr->numbones; iBone++)
-	{
-		const mstudiobone_t *pBone = pStudioHdr->pBone( iBone );
-
-		int nLodID;
-		for ( nLodID = 0; nLodID < rootLOD; nLodID++)
-		{
-			int iLodMask = BONE_USED_BY_VERTEX_LOD0 << nLodID;
-
-			if (pBone->flags & (BONE_USED_BY_VERTEX_LOD0 << rootLOD))
-			{
-				pBone->flags = pBone->flags | iLodMask;
-			}
-			else
-			{
-				pBone->flags = pBone->flags & (~iLodMask);
-			}
-		}
-	}
-#endif
 
     {
 //		CP4AutoEditAddFile autop4( fileName );

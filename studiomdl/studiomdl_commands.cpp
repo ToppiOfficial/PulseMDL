@@ -1666,80 +1666,6 @@ void Option_Flex(char *name, char *vtafile, int imodel, float pairsplit) {
 }
 
 
-void PrintFlexrule(s_flexrule_t *pRule) {
-    printf("%s = ", g_flexdesc[pRule->flex].FACS);
-    for (int i = 0; i < pRule->numops; i++) {
-        switch (pRule->op[i].op) {
-            case STUDIO_CONST:
-                printf("%f ", pRule->op[i].d.value);
-                break;
-            case STUDIO_FETCH1:
-                printf("%s ", g_flexcontroller[pRule->op[i].d.index].name);
-                break;
-            case STUDIO_FETCH2:
-                printf("[%d] ", pRule->op[i].d.index);
-                break;
-            case STUDIO_ADD:
-                printf("+ ");
-                break;
-            case STUDIO_SUB:
-                printf("- ");
-                break;
-            case STUDIO_MUL:
-                printf("* ");
-                break;
-            case STUDIO_DIV:
-                printf("/ ");
-                break;
-            case STUDIO_NEG:
-                printf("neg ");
-                break;
-            case STUDIO_MAX:
-                printf("max ");
-                break;
-            case STUDIO_MIN:
-                printf("min ");
-                break;
-            case STUDIO_COMMA:
-                printf(", ");
-                break; // error
-            case STUDIO_OPEN:
-                printf("( ");
-                break; // error
-            case STUDIO_CLOSE:
-                printf(") ");
-                break; // error
-            case STUDIO_2WAY_0:
-                printf("2WAY_0 ");
-                break;
-            case STUDIO_2WAY_1:
-                printf("2WAY_1 ");
-                break;
-            case STUDIO_NWAY:
-                printf("NWAY ");
-                break;
-            case STUDIO_COMBO:
-                printf("COMBO ");
-                break;
-            case STUDIO_DOMINATE:
-                printf("DOMINATE ");
-                break;
-            case STUDIO_DME_LOWER_EYELID:
-                printf("DME_LOWER_EYELID ");
-                break;
-            case STUDIO_DME_UPPER_EYELID:
-                printf("DME_UPPER_EYELID ");
-                break;
-            default:
-                printf("err%d ", pRule->op[i].op);
-                break;
-        }
-    }
-    printf("\n");
-}
-
-
-
 void Option_Flexrule(s_model_t * /* pmodel */, const char *name) {
     int precedence[32];
     precedence[STUDIO_CONST] = 0;
@@ -1866,58 +1792,6 @@ void Option_Flexrule(s_model_t * /* pmodel */, const char *name) {
         TokenError("expression %s too complicated\n", g_flexdesc[pRule->flex].FACS);
     }
 
-    if (0) {
-        printf("%s = ", g_flexdesc[pRule->flex].FACS);
-        for (k = 0; k < i; k++) {
-            switch (stream[k].op) {
-                case STUDIO_CONST:
-                    printf("%f ", stream[k].d.value);
-                    break;
-                case STUDIO_FETCH1:
-                    printf("%s ", g_flexcontroller[stream[k].d.index].name);
-                    break;
-                case STUDIO_FETCH2:
-                    printf("[%d] ", stream[k].d.index);
-                    break;
-                case STUDIO_ADD:
-                    printf("+ ");
-                    break;
-                case STUDIO_SUB:
-                    printf("- ");
-                    break;
-                case STUDIO_MUL:
-                    printf("* ");
-                    break;
-                case STUDIO_DIV:
-                    printf("/ ");
-                    break;
-                case STUDIO_NEG:
-                    printf("neg ");
-                    break;
-                case STUDIO_MAX:
-                    printf("max ");
-                    break;
-                case STUDIO_MIN:
-                    printf("min ");
-                    break;
-                case STUDIO_COMMA:
-                    printf(", ");
-                    break; // error
-                case STUDIO_OPEN:
-                    printf("( ");
-                    break; // error
-                case STUDIO_CLOSE:
-                    printf(") ");
-                    break; // error
-                default:
-                    printf("err%d ", stream[k].op);
-                    break;
-            }
-        }
-        printf("\n");
-        // exit(1);
-    }
-
     j = 0;
     for (k = 0; k < i; k++) {
         if (j >= MAX_OPS) {
@@ -2021,10 +1895,6 @@ void Option_Flexrule(s_model_t * /* pmodel */, const char *name) {
 
     if (pRule->numops > MAX_OPS) {
         TokenError("expression %s too complicated\n", g_flexdesc[pRule->flex].FACS);
-    }
-
-    if (0) {
-        PrintFlexrule(pRule);
     }
 }
 

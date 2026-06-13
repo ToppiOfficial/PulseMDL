@@ -1,4 +1,4 @@
-# KitsuneMDL (studiomdl_v2)
+# KitsuneMDL
 
 > **Experimental**
 
@@ -14,12 +14,6 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 > [!WARNING]
 > **Collision compile accuracy may vary.** The standalone `$collisionmodel` and `$collisionjoints` pipeline (which no longer requires vphysics.dll) is built from a combination of open-source references and reverse engineering. References used: [VPhysics-Jolt](https://github.com/misyltoad/VPhysics-Jolt), [Gmod-vphysics](https://github.com/DrChat/Gmod-vphysics), and [Valve Developer Wiki - VPhysics](https://developer.valvesoftware.com/wiki/VPhysics). Its output may not be fully consistent with what official Valve studiomdl produces. If you encounter incorrect physics shapes, unexpected behavior, or compilation differences, please report them as issues.
 
-## TODO
-
-- ~~Remove the dependency on vphysics.dll (while retaining `$collisionmodel` and `$collisionjoints` support) and dmxconvert.exe~~
-- ~~Investigate the mesh split issue reported by REDxEYE regarding corrupted flex vertices.~~ (see Known Issues above)
-- Further cleanup and removal of unused or dead code
-- ~~Improve stability when loading large SMD models~~
 
 ## Features
 

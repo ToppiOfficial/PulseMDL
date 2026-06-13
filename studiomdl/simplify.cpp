@@ -835,17 +835,6 @@ Vector calcMovement(s_animation_t *panim, int iFrom, int iTo) {
     return p2 - p1;
 }
 
-#if 0
-                                                                                                                        // FIXME: add in correct motion!!!
-	int iFrame = pRule->peak - pRule->start - k;
-	if (pRule->start + k > panim->numframes - 1)
-	{
-		iFrame = iFrame + 1;
-	}
-	Vector pos = footfall;
-	if (panim->numframes > 1)
-		pos = pos + panim->piecewisemove[0].pos * (iFrame) / (panim->numframes - 1.0f);
-#endif
 
 
 //-----------------------------------------------------------------------------
@@ -1222,33 +1211,6 @@ void subtractBaseAnimations(s_animation_t *psrc, s_animation_t *pdest, int srcfr
         }
     }
 
-#if 0
-                                                                                                                            // cleanup weightlists
-	for (k = 0; k < g_StudioMdlContext.numbones; k++)
-	{
-		panim->weight[k] = 0.0;
-	}
-
-	for (k = 0; k < g_StudioMdlContext.numbones; k++)
-	{
-		if (g_weightlist[panim->weightlist].weight[k] > 0.0)
-		{
-			for (j = 0; j < panim->numframes; j++)
-			{	
-				if (fabs(panim->sanim[j][k].pos[0]) > 0.001 || 
-					fabs(panim->sanim[j][k].pos[1]) > 0.001 || 
-					fabs(panim->sanim[j][k].pos[2]) > 0.001 || 
-					fabs(panim->sanim[j][k].rot[0]) > 0.001 || 
-					fabs(panim->sanim[j][k].rot[1]) > 0.001 || 
-					fabs(panim->sanim[j][k].rot[2]) > 0.001)
-				{
-					panim->weight[k] = g_weightlist[panim->weightlist].weight[k];
-					break;
-				}
-			}
-		}
-	}
-#endif
 }
 
 
@@ -2030,15 +1992,6 @@ void localHierarchy(s_animation_t *panim, char *pBonename, char *pParentname, in
         }
 
         MatrixAngles(local, pRule->localData.pError[k].q, pRule->localData.pError[k].pos);
-
-        /*
-		QAngle ang;
-		QuaternionAngles( pRule->errorData.pError[k].q, ang );
-		printf("%d  %.1f %.1f %.1f : %.1f %.1f %.1f\n", 
-			k,
-			pRule->errorData.pError[k].pos.x, pRule->errorData.pError[k].pos.y, pRule->errorData.pError[k].pos.z, 
-			ang.x, ang.y, ang.z );
-		*/
     }
 }
 
@@ -2182,72 +2135,6 @@ void fixupIKErrors(s_animation_t *panim, s_ikrule_t *pRule) {
 
     switch (pRule->type) {
         case IK_SELF:
-#if 0
-                                                                                                                                    // this code has never been run.....
-		{
-			matrix3x4_t boneToWorld[MAXSTUDIOBONES];
-			matrix3x4_t worldToBone;
-			matrix3x4_t local;
-			Vector targetPos;
-			Quaternion targetQuat;
-
-			pRule->bone = findGlobalBone( pRule->bonename );
-			if (pRule->bone == -1)
-			{
-				MdlError("unknown bone '%s' in ikrule\n", pRule->bonename );
-			}
-
-			matrix3x4_t srcBoneToWorld[MAXSTUDIOSRCBONES];
-			BuildRawTransforms( panim->source, pRule->contact + panim->startframe - panim->source->startframe, srcBoneToWorld );
-			TranslateAnimations( panim->source, srcBoneToWorld, boneToWorld );
-
-			MatrixInvert( boneToWorld[pRule->bone], worldToBone );
-			ConcatTransforms( worldToBone, boneToWorld[g_ikchain[pRule->chain].link[2].bone], local );
-			MatrixAngles( local, targetQuat, targetPos );
-
-			for (k = 0; k < pRule->errorData.numerror; k++)
-			{
-				BuildRawTransforms( panim->source, k + pRule->start + panim->startframe - panim->source->startframe, srcBoneToWorld );
-				TranslateAnimations( panim->source, srcBoneToWorld, boneToWorld );
-
-				float cycle = (panim->numframes <= 1) ? 0 : (k + pRule->start) / (panim->numframes - 1);
-				float s = IKRuleWeight( pRule, cycle );
-
-				Quaternion curQuat;
-				Vector curPos;
-
-				// convert into rule bone space
-				MatrixInvert( boneToWorld[pRule->bone], worldToBone );
-				ConcatTransforms( worldToBone, boneToWorld[g_ikchain[pRule->chain].link[2].bone], local );
-				MatrixAngles( local, curQuat, curPos );
-
-				// find blended rule bone relative position
-				Vector rulePos = curPos * s + targetPos * (1.0 - s);
-				Quaternion ruleQuat;
-				QuaternionSlerp( curQuat, targetQuat, s, ruleQuat );
-				QuaternionMatrix( ruleQuat, rulePos, local );
-
-				Vector worldPos;
-				VectorTransform( rulePos, boneToWorld[pRule->bone], worldPos );
-
-				// printf("%d (%d) : %.1f %.1f %1.f\n", k + pRule->start, pRule->peak, pos.x, pos.y, pos.z );
-				Studio_SolveIK(
-					g_ikchain[pRule->chain].link[0].bone,
-					g_ikchain[pRule->chain].link[1].bone,
-					g_ikchain[pRule->chain].link[2].bone,
-					worldPos,
-					boneToWorld );
-
-				// slam final matrix
-				// FIXME: this isn't taking into account the IK may have failed
-				ConcatTransforms( boneToWorld[pRule->bone], local, boneToWorld[g_ikchain[pRule->chain].link[2].bone] );
-
-				solveBone( panim, k + pRule->start, g_ikchain[pRule->chain].link[0].bone, boneToWorld );  
-				solveBone( panim, k + pRule->start, g_ikchain[pRule->chain].link[1].bone, boneToWorld );  
-				solveBone( panim, k + pRule->start, g_ikchain[pRule->chain].link[2].bone, boneToWorld );  
-			}
-		}
-#endif
             break;
         case IK_WORLD:
         case IK_GROUND: {
@@ -2587,18 +2474,6 @@ void RemapVertexAnimations() {
         BuildVAnimMap(pVSource, pVSourceAnim, pLodData, model_to_vanim_vert_imap);
     }
 
-#if 0
-                                                                                                                            s_vertanim_t *defaultanims = NULL;
-
-	if (g_defaultflexkey)
-	{
-		defaultanims = g_defaultflexkey->source->vanim[g_defaultflexkey->frame];
-	}
-	else
-	{
-		defaultanims = g_flexkey[0].source->vanim[0];
-	}
-#endif
 
     // reset model to be default animations
     if (g_defaultflexkey) {
@@ -3154,34 +3029,6 @@ void limitIKChainLength() {
             printf("knee %s %f %f %f\n", g_ikchain[k].name, kneeDir.x, kneeDir.y, kneeDir.z);
         }
 
-#if 0
-                                                                                                                                // don't bother for now, storing the knee direction should fix the runtime problems.
-		for (i = 0; i < g_numani; i++)
-		{
-			s_animation_t *panim = g_panimation[i];
-
-			if (panim->flags & STUDIO_DELTA)
-				continue;
-
-			for (j = 0; j < panim->numframes; j++)
-			{
-				CalcBoneTransforms( panim, j, boneToWorld );
-
-				Vector worldFoot;
-				MatrixPosition( boneToWorld[ g_ikchain[k].link[2].bone ], worldFoot );
-
-				Vector targetKneeDir;
-				VectorRotate( kneeDir, boneToWorld[ g_ikchain[k].link[0].bone ], targetKneeDir );
-
-				// run it through the normal IK solver, this should move the foot positions to someplace legal
-				Studio_SolveIK( g_ikchain[k].link[0].bone, g_ikchain[k].link[1].bone, g_ikchain[k].link[2].bone, worldFoot, targetKneeDir, boneToWorld );
-
-				solveBone( panim, j, g_ikchain[k].link[0].bone, boneToWorld );  
-				solveBone( panim, j, g_ikchain[k].link[1].bone, boneToWorld );  
-				solveBone( panim, j, g_ikchain[k].link[2].bone, boneToWorld );  
-			}
-		}
-#endif
     }
 }
 
@@ -7066,15 +6913,6 @@ static void ProcessIKRules() {
                         }
 
                         MatrixAngles(local, pRule->errorData.pError[k].q, pRule->errorData.pError[k].pos);
-
-                        /*
-						QAngle ang;
-						QuaternionAngles( pRule->errorData.pError[k].q, ang );
-						printf("%d  %.1f %.1f %.1f : %.1f %.1f %.1f\n", 
-							k,
-							pRule->errorData.pError[k].pos.x, pRule->errorData.pError[k].pos.y, pRule->errorData.pError[k].pos.z, 
-							ang.x, ang.y, ang.z );
-						*/
                     }
                 }
                     break;
@@ -7109,11 +6947,6 @@ static void ProcessIKRules() {
                         MatrixAngles(boneToWorld[pRule->bone], pRule->q, pRule->pos);
                     }
 
-#if 0
-                                                                                                                                            printf("%d  %.1f %.1f %.1f\n", 
-						pRule->peak,
-						pRule->pos.x, pRule->pos.y, pRule->pos.z );
-#endif
 
                     for (k = 0; k < pRule->errorData.numerror; k++) {
                         int t = k + pRule->start;
@@ -7140,15 +6973,6 @@ static void ProcessIKRules() {
                         // calc position error
                         ConcatTransforms(worldToBone, boneToWorld[bone], local);
                         MatrixAngles(local, pRule->errorData.pError[k].q, pRule->errorData.pError[k].pos);
-
-#if 0
-                                                                                                                                                QAngle ang;
-						QuaternionAngles( pRule->errorData.pError[k].q, ang );
-						printf("%d  %.1f %.1f %.1f : %.1f %.1f %.1f\n", 
-							k + pRule->start,
-							pRule->errorData.pError[k].pos.x, pRule->errorData.pError[k].pos.y, pRule->errorData.pError[k].pos.z, 
-							ang.x, ang.y, ang.z );
-#endif
                     }
                 }
                     break;
@@ -7184,21 +7008,9 @@ static void ProcessIKRules() {
                     pRule->pos = footfall;
                     pRule->q = Quaternion(RadianEuler(0, 0, 0));
 
-#if 0
-                                                                                                                                            printf("%d  %.1f %.1f %.1f\n", 
-						pRule->peak,
-						pRule->pos.x, pRule->pos.y, pRule->pos.z );
-#endif
-
                     float s;
                     for (k = 0; k < pRule->errorData.numerror; k++) {
                         int t = k + pRule->start;
-                        /*
-						if (t > pRule->end)
-						{
-							t = t - (panim->numframes - 1);
-						}
-						*/
 
                         if (pRule->usesequence) {
                             CalcSeqTransforms(n, t, boneToWorld);
@@ -7247,15 +7059,6 @@ static void ProcessIKRules() {
                         // calc position error
                         ConcatTransforms(worldToBone, boneToWorld[bone], local);
                         MatrixAngles(local, pRule->errorData.pError[k].q, pRule->errorData.pError[k].pos);
-
-#if 0
-                                                                                                                                                QAngle ang;
-						QuaternionAngles( pRule->errorData.pError[k].q, ang );
-						printf("%d  %.1f %.1f %.1f : %.1f %.1f %.1f\n", 
-							k + pRule->start,
-							pRule->errorData.pError[k].pos.x, pRule->errorData.pError[k].pos.y, pRule->errorData.pError[k].pos.z, 
-							ang.x, ang.y, ang.z );
-#endif
                     }
                 }
                     break;
@@ -8348,6 +8151,8 @@ static void InjectDummyBindPoseSequence() {
 
 void SimplifyModel() {
     if (g_nosequence) {
+        if (g_StudioMdlContext.modelIntentionallyHasZeroSequences)
+            MdlError("$nosequence and $modelhasnosequences are mutually exclusive\n");
         if (g_sequence.Count() > 0) {
             MdlWarning("$nosequence ignored - model already has %d sequence(s)\n", g_sequence.Count());
         } else if (g_numincludemodels == 0) {

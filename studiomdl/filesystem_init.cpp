@@ -27,8 +27,6 @@
 #include "tier1/smartptr.h"
 
 
-// memdbgon must be the last include file in a .cpp file!!!
-// DISABLED #include "tier0/memdbgon.h"
 
 #if !defined( _X360 )
 #define GAMEINFO_FILENAME			"gameinfo.txt"

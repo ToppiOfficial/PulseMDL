@@ -564,11 +564,6 @@ static void BuildUniqueVertexList( s_source_t *pSource, const int *pDesiredToVLi
 		// store a bunch of other info
 		vertex.material			= v_listdata[j].m;
 
-#if 0
-		pSource->vertexInfo[i].firstref		= v_listdata[j].firstref;
-		pSource->vertexInfo[i].lastref		= v_listdata[j].lastref;
-#endif
-		// printf("%4d : %2d :  %6.2f %6.2f %6.2f\n", i, psource->boneweight[i].bone[0], psource->vertex[i][0], psource->vertex[i][1], psource->vertex[i][2] );
 	}
 
 }
@@ -684,12 +679,6 @@ static void PointMeshesToVertexAndFaceData( s_source_t *pSource, int *pDesiredTo
 		}
 	}
 
-	/*
-	for (k = 0; k < MAXSTUDIOSKINS; k++)
-	{
-		printf("%d : %d:%d %d:%d\n", k, psource->mesh[k].numvertices, psource->mesh[k].vertexoffset, psource->mesh[k].numfaces, psource->mesh[k].faceoffset );
-	}
-	*/
 }
 
 
