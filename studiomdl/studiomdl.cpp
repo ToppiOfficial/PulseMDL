@@ -1026,6 +1026,77 @@ void PushMemoryScript(char *pszBuffer, const int nSize);
 
 bool PopMemoryScript();
 
+static void BuildCombinationSourceData(s_source_t *pSource, CDmeCombinationOperator *pCombination) {
+    int nControlCount = pCombination->GetRawControlCount();
+    for (int i = 0; i < nControlCount; ++i) {
+        int m = pSource->m_CombinationControls.AddToTail();
+        s_combinationcontrol_t &control = pSource->m_CombinationControls[m];
+        Q_strncpy(control.name, pCombination->GetRawControlName(i), sizeof(control.name));
+    }
+
+    int nTargetCount = pCombination->GetOperationTargetCount();
+    for (int i = 0; i < nTargetCount; ++i) {
+        int nOpCount = pCombination->GetOperationCount(i);
+        for (int j = 0; j < nOpCount; ++j) {
+            CDmElement *pDeltaState = pCombination->GetOperationDeltaState(i, j);
+            if (!pDeltaState)
+                continue;
+            int nFlex = FindSourceFlexKey(pSource, pDeltaState->GetName());
+            if (nFlex < 0)
+                continue;
+            int k = pSource->m_CombinationRules.AddToTail();
+            s_combinationrule_t &rule = pSource->m_CombinationRules[k];
+            rule.m_nFlex = nFlex;
+            rule.m_Combination = pCombination->GetOperationControls(i, j);
+            int nDominatorCount = pCombination->GetOperationDominatorCount(i, j);
+            for (int l = 0; l < nDominatorCount; ++l) {
+                int m = rule.m_Dominators.AddToTail();
+                rule.m_Dominators[m] = pCombination->GetOperationDominator(i, j, l);
+            }
+        }
+    }
+
+    nControlCount = pCombination->GetControlCount();
+    for (int i = 0; i < nControlCount; ++i) {
+        int k = pSource->m_FlexControllerRemaps.AddToTail();
+        s_flexcontrollerremap_t &remap = pSource->m_FlexControllerRemaps[k];
+        remap.m_Name = pCombination->GetControlName(i);
+        remap.m_FlexGroup = pCombination->GetControlFlexGroup(i);
+        remap.m_bIsStereo = pCombination->IsStereoControl(i);
+        remap.m_Index = -1;
+        remap.m_LeftIndex = -1;
+        remap.m_RightIndex = -1;
+        remap.m_MultiIndex = -1;
+        remap.m_EyesUpDownFlexController = -1;
+        remap.m_BlinkController = -1;
+
+        int nRemapCount = pCombination->GetRawControlCount(i);
+        if (pCombination->IsEyelidControl(i)) {
+            remap.m_RemapType = FLEXCONTROLLER_REMAP_EYELID;
+            const char *pEyesUpDownFlexName = pCombination->GetEyesUpDownFlexName(i);
+            remap.m_EyesUpDownFlexName = pEyesUpDownFlexName ? pEyesUpDownFlexName : "eyes_updown";
+        } else {
+            switch (nRemapCount) {
+                case 0:
+                case 1:
+                    remap.m_RemapType = FLEXCONTROLLER_REMAP_PASSTHRU;
+                    break;
+                case 2:
+                    remap.m_RemapType = FLEXCONTROLLER_REMAP_2WAY;
+                    break;
+                default:
+                    remap.m_RemapType = FLEXCONTROLLER_REMAP_NWAY;
+                    break;
+            }
+        }
+
+        Assert(nRemapCount != 0);
+        for (int j = 0; j < nRemapCount; ++j) {
+            remap.m_RawControls.emplace_back(pCombination->GetRawControlName(i, j));
+        }
+    }
+}
+
 //-----------------------------------------------------------------------------
 // Adds combination data to the source
 //-----------------------------------------------------------------------------
@@ -1225,88 +1296,15 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
             }
         }
 
+        BuildCombinationSourceData(pSource, pCombination);
+
         V_strncpy(token, sOldToken.Get(), ARRAYSIZE(token));
         UnGetToken();
 
         return;
     }
 
-    // Define the remapped controls
-    int nControlCount = pCombination->GetRawControlCount();
-    for (int i = 0; i < nControlCount; ++i) {
-        int m = pSource->m_CombinationControls.AddToTail();
-        s_combinationcontrol_t &control = pSource->m_CombinationControls[m];
-        Q_strncpy(control.name, pCombination->GetRawControlName(i), sizeof(control.name));
-    }
-
-    // Define the combination + domination rules
-    int nTargetCount = pCombination->GetOperationTargetCount();
-    for (int i = 0; i < nTargetCount; ++i) {
-        int nOpCount = pCombination->GetOperationCount(i);
-        for (int j = 0; j < nOpCount; ++j) {
-            CDmElement *pDeltaState = pCombination->GetOperationDeltaState(i, j);
-            if (!pDeltaState)
-                continue;
-
-            int nFlex = FindSourceFlexKey(pSource, pDeltaState->GetName());
-            if (nFlex < 0)
-                continue;
-
-            int k = pSource->m_CombinationRules.AddToTail();
-            s_combinationrule_t &rule = pSource->m_CombinationRules[k];
-            rule.m_nFlex = nFlex;
-            rule.m_Combination = pCombination->GetOperationControls(i, j);
-            int nDominatorCount = pCombination->GetOperationDominatorCount(i, j);
-            for (int l = 0; l < nDominatorCount; ++l) {
-                int m = rule.m_Dominators.AddToTail();
-                rule.m_Dominators[m] = pCombination->GetOperationDominator(i, j, l);
-            }
-        }
-    }
-
-    // Define the remapping controls
-    nControlCount = pCombination->GetControlCount();
-    for (int i = 0; i < nControlCount; ++i) {
-        int k = pSource->m_FlexControllerRemaps.AddToTail();
-        s_flexcontrollerremap_t &remap = pSource->m_FlexControllerRemaps[k];
-        remap.m_Name = pCombination->GetControlName(i);
-        remap.m_FlexGroup = pCombination->GetControlFlexGroup(i);
-        remap.m_bIsStereo = pCombination->IsStereoControl(i);
-        remap.m_Index = -1;            // Don't know this right now
-        remap.m_LeftIndex = -1;        // Don't know this right now
-        remap.m_RightIndex = -1;    // Don't know this right now
-        remap.m_MultiIndex = -1;    // Don't know this right now
-        remap.m_EyesUpDownFlexController = -1;
-        remap.m_BlinkController = -1;
-
-        int nRemapCount = pCombination->GetRawControlCount(i);
-        if (pCombination->IsEyelidControl(i)) {
-            remap.m_RemapType = FLEXCONTROLLER_REMAP_EYELID;
-
-            // Save the eyes_updown flex for later
-            const char *pEyesUpDownFlexName = pCombination->GetEyesUpDownFlexName(i);
-            remap.m_EyesUpDownFlexName = pEyesUpDownFlexName ? pEyesUpDownFlexName : "eyes_updown";
-        } else {
-            switch (nRemapCount) {
-                case 0:
-                case 1:
-                    remap.m_RemapType = FLEXCONTROLLER_REMAP_PASSTHRU;
-                    break;
-                case 2:
-                    remap.m_RemapType = FLEXCONTROLLER_REMAP_2WAY;
-                    break;
-                default:
-                    remap.m_RemapType = FLEXCONTROLLER_REMAP_NWAY;
-                    break;
-            }
-        }
-
-        Assert(nRemapCount != 0);
-        for (int j = 0; j < nRemapCount; ++j) {
-            const char *pRemapName = pCombination->GetRawControlName(i, j);
-            remap.m_RawControls.emplace_back(pRemapName);
-        }
-    }
+    BuildCombinationSourceData(pSource, pCombination);
 }
 
 //-----------------------------------------------------------------------------

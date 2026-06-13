@@ -7171,6 +7171,31 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
             }
         }
     }
+
+    // Deep-copy flex metadata. The initial memcpy aliased these CUtlVectors to pOrig's
+    // buffers. m_FlexKeys also needs source pointer fixup: without it, BuildVAnimFlags
+    // in simplify.cpp skips every flex key because g_flexkey[n].source != pClone.
+    // Toppi: this is confusing af.
+    memset(&pClone->m_FlexKeys, 0, sizeof(pClone->m_FlexKeys));
+    pClone->m_FlexKeys.SetCount(pOrig->m_FlexKeys.Count());
+    for (int i = 0; i < pOrig->m_FlexKeys.Count(); i++) {
+        pClone->m_FlexKeys[i] = pOrig->m_FlexKeys[i];
+        if (pClone->m_FlexKeys[i].source == pOrig)
+            pClone->m_FlexKeys[i].source = pClone;
+    }
+    memset(&pClone->m_CombinationControls, 0, sizeof(pClone->m_CombinationControls));
+    pClone->m_CombinationControls.SetCount(pOrig->m_CombinationControls.Count());
+    for (int i = 0; i < pOrig->m_CombinationControls.Count(); i++)
+        pClone->m_CombinationControls[i] = pOrig->m_CombinationControls[i];
+    memset(&pClone->m_CombinationRules, 0, sizeof(pClone->m_CombinationRules));
+    pClone->m_CombinationRules.SetCount(pOrig->m_CombinationRules.Count());
+    for (int i = 0; i < pOrig->m_CombinationRules.Count(); i++)
+        pClone->m_CombinationRules[i] = pOrig->m_CombinationRules[i];
+    memset(&pClone->m_FlexControllerRemaps, 0, sizeof(pClone->m_FlexControllerRemaps));
+    pClone->m_FlexControllerRemaps.SetCount(pOrig->m_FlexControllerRemaps.Count());
+    for (int i = 0; i < pOrig->m_FlexControllerRemaps.Count(); i++)
+        pClone->m_FlexControllerRemaps[i] = pOrig->m_FlexControllerRemaps[i];
+
     return pClone;
 }
 
