@@ -1059,7 +1059,19 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
                 const char *pszFlexGroup = pControlElement->GetValueString("flexgroup");
                 if (!pszFlexGroup || !pszFlexGroup[0])
                     pszFlexGroup = "default";
-                FindOrAddFlexController(pControlElement->GetName(), pszFlexGroup, flMin, flMax);
+                if (pCombination->IsStereoControl(i)) {
+                    const char *pszName = pControlElement->GetName();
+                    int nNameLen = (int)strlen(pszName);
+                    char *pTemp = (char *)_alloca(nNameLen + 7);
+                    memcpy(pTemp, "right_", 6);
+                    memcpy(pTemp + 6, pszName, nNameLen + 1);
+                    FindOrAddFlexController(pTemp, pszFlexGroup, flMin, flMax);
+                    memcpy(pTemp, "left_", 5);
+                    memcpy(pTemp + 5, pszName, nNameLen + 1);
+                    FindOrAddFlexController(pTemp, pszFlexGroup, flMin, flMax);
+                } else {
+                    FindOrAddFlexController(pControlElement->GetName(), pszFlexGroup, flMin, flMax);
+                }
             }
         }
 

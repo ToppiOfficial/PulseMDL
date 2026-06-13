@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *KITSUNE_MDL_VERSION = "0.1.5";
+static const char *KITSUNE_MDL_VERSION = "0.1.6";
 
 extern StudioMdlContext g_StudioMdlContext;
 
