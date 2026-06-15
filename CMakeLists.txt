@@ -63,10 +63,11 @@ add_executable(kitsunemdl
         studiomdl/studiomdl_app.cpp
         studiomdl/collisionmodel.cpp
         studiomdl/collisionmodelsource.cpp
+        studiomdl/convexdecompose.cpp
         studiomdl/studiomdl_app.h
 )
 target_compile_definitions(kitsunemdl PRIVATE -DSTATIC_TIER0)
-target_include_directories(kitsunemdl PUBLIC include libs/minicollision)
+target_include_directories(kitsunemdl PUBLIC include libs/minicollision libs/vhacd)
 target_link_libraries(kitsunemdl PRIVATE
         tier0
         tier1

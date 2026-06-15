@@ -7735,6 +7735,33 @@ void ReportUnusedRenderMeshDefs() {
     }
 }
 
+//-----------------------------------------------------------------------------
+// Resolve a $rendermesh by name to its loaded, filtered geometry.
+//
+// Used by the collision auto-generation path ($generate / $generatejoint) so it
+// can decompose an already-filtered render mesh (DmeMesh isolate/exclude,
+// removematerial, nofacial) into convex collision.  Lazily loads and filters the
+// owned source on first use, exactly like ProcessOptionStudio does for $body.
+// Returns the shared owned source (do NOT free it); NULL if the name is unknown.
+//-----------------------------------------------------------------------------
+s_source_t *GetRenderMeshSource(const char *name) {
+    s_rendermesh_def_t *pDef = FindRenderMeshDef(name);
+    if (!pDef)
+        return nullptr;
+
+    if (!pDef->pOwnedSource) {
+        s_source_t *pRaw = Load_Source(pDef->filename, "", false, true);
+        if (pRaw) {
+            s_source_t *pOwned = CloneSourceGeometry(pRaw);
+            ApplyRenderMeshFilter(pOwned, pDef);
+            pDef->pOwnedSource = pOwned;
+        }
+    }
+
+    pDef->used = true;
+    return pDef->pOwnedSource;
+}
+
 
 //-----------------------------------------------------------------------------
 // $driverbone - inline quatinterp procedural bone driven by triggerpose frames
