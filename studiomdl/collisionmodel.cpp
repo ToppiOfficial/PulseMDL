@@ -1592,7 +1592,9 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 	}
 
 	if ( req.maxHulls < 1 ) req.maxHulls = 1;
-	if ( req.maxVerts < 4 ) req.maxVerts = 4;
+	if ( req.maxHulls > 8 ) req.maxHulls = 8;
+	if ( req.maxVerts < 4 )   req.maxVerts = 4;
+	if ( req.maxVerts > 128 ) req.maxVerts = 128;
 	return true;
 }
 

@@ -2267,6 +2267,23 @@ static void ComputeVertexAnimationSpeed(s_flexkey_t &flexKey) {
 //-----------------------------------------------------------------------------
 // Purpose: map the vertex animations to their equivalent vertex in the base animations
 //-----------------------------------------------------------------------------
+//-----------------------------------------------------------------------------
+// Returns true if a vertex-animation vertex id is safe to use as an index into
+// the per-source vanim arrays (vanim_flag / vanim_mapcount / vanim_map), all of
+// which are allocated with pVSource->numvertices entries.
+//
+// A vanim vertex id can legitimately fall outside [0, numvertices) - for example
+// eyeball verts or morph data that does not line up 1:1 with the drawn mesh - and
+// existing code (see the $staticproppose path) simply skips those. Indexing the
+// arrays blindly with such an id reads/writes off the end of the heap allocation,
+// which manifests as an intermittent EXCEPTION_ACCESS_VIOLATION: the over-read
+// only faults on the runs where the buffer happens to sit against an unmapped
+// page. Callers must skip the vanim when this returns false.
+//-----------------------------------------------------------------------------
+static bool IsValidVAnimVertex(const s_source_t *pVSource, int nVertex) {
+    return (nVertex >= 0 && nVertex < pVSource->numvertices);
+}
+
 static void BuildVAnimFlags(s_source_t *pVSource, s_sourceanim_t *pVSourceAnim, int nCurrentFlexKey) {
     pVSourceAnim->vanim_flag = (int *) calloc(pVSource->numvertices, sizeof(int));
     for (int n = nCurrentFlexKey; n < g_numflexkeys; n++) {
@@ -2289,7 +2306,10 @@ static void BuildVAnimFlags(s_source_t *pVSource, s_sourceanim_t *pVSourceAnim, 
 
         int k = g_flexkey[n].frame;
         for (int m = 0; m < pVSourceAnim->numvanims[k]; m++) {
-            pVSourceAnim->vanim_flag[pVSourceAnim->vanim[k][m].vertex] = 1;
+            int nVertex = pVSourceAnim->vanim[k][m].vertex;
+            if (!IsValidVAnimVertex(pVSource, nVertex))
+                continue;
+            pVSourceAnim->vanim_flag[nVertex] = 1;
         }
     }
 }
@@ -2692,7 +2712,10 @@ static void RemapVertexAnimationsNewVersion() {
         for (; i < j; ++i) {
             int k = ppSortedFlexKeys[i]->frame;
             for (int m = 0; m < pVSourceAnim->numvanims[k]; m++) {
-                pVSourceAnim->vanim_flag[pVSourceAnim->vanim[k][m].vertex] = 1;
+                int nVertex = pVSourceAnim->vanim[k][m].vertex;
+                if (!IsValidVAnimVertex(pVSource, nVertex))
+                    continue;
+                pVSourceAnim->vanim_flag[nVertex] = 1;
             }
         }
         --i;
@@ -2702,6 +2725,7 @@ static void RemapVertexAnimationsNewVersion() {
     }
 
     int nNumMoved = 0;
+    int nSkippedUnmapped = 0;    // vanim verts dropped because they have no vertex in the (LOD) model
     static bool pDoesMove[MAXSTUDIOSRCVERTS];
     memset(pDoesMove, 0, MAXSTUDIOSRCVERTS * sizeof(bool));
 
@@ -2719,6 +2743,14 @@ static void RemapVertexAnimationsNewVersion() {
         s_vertanim_t *pDestVAnim = g_flexkey[i].vanim;
 
         for (int m = 0; m < nNumSrcVAnims; m++, pSrcVAnim++) {
+            // A vanim vertex id outside [0, numvertices) has no entry in the vertex map
+            // (it does not exist in the model - e.g. removed by $lod decimation), so it
+            // cannot be applied. Skip it; indexing the map arrays with it reads off the
+            // end of the allocation and crashes intermittently.
+            if (!IsValidVAnimVertex(pVSource, pSrcVAnim->vertex)) {
+                nSkippedUnmapped++;
+                continue;
+            }
             // bah, only do it for ones that found a match!
             if (!pVSourceAnim->vanim_mapcount[pSrcVAnim->vertex])
                 continue;
@@ -2740,7 +2772,13 @@ static void RemapVertexAnimationsNewVersion() {
                     g_flexkey[i].vanimtype = STUDIO_VERT_ANIM_WRINKLE;
                 }
 
-                // count all the unique verts that actually move
+                // count all the unique verts that actually move (pDoesMove is sized MAXSTUDIOSRCVERTS)
+                if (pDestVAnim->vertex < 0 || pDestVAnim->vertex >= MAXSTUDIOSRCVERTS) {
+                    MdlError("Vertex animation '%s' in source '%s' mapped to vertex %d, "
+                             "out of range [0,%d).\n",
+                             pVSourceAnim->animationname, pVSource->filename, pDestVAnim->vertex,
+                             MAXSTUDIOSRCVERTS);
+                }
                 if (!pDoesMove[pDestVAnim->vertex]) {
                     pDoesMove[pDestVAnim->vertex] = true;
                     nNumMoved++;
@@ -2756,6 +2794,14 @@ static void RemapVertexAnimationsNewVersion() {
         MdlError("Too many flexed verts %d (%d)\n", nNumMoved, MAXSTUDIOFLEXVERTS);
     } else if (nNumMoved > 0 && !g_StudioMdlContext.quiet) {
         printf("Max flex verts %d\n", nNumMoved);
+    }
+
+    if (nSkippedUnmapped > 0) {
+        // Usually harmless: these verts were removed from the model (commonly by $lod
+        // decimation) so their flex deltas have nowhere to go. Only worth investigating
+        // if a morph visibly loses movement.
+        MdlWarning("Skipped %d flex vertex deltas with no matching model vertex "
+                   "(verts removed from the model, e.g. by $lod decimation).\n", nSkippedUnmapped);
     }
 }
 

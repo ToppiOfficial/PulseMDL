@@ -480,7 +480,13 @@ void CClampedSource::AddAnimations(const s_source_t *pOrigSource) {
         for (int i = 0; i < MAXSTUDIOANIMFRAMES; i++) {
             // Count the number of verts which apply to this sub-model...
             for (int j = 0; j < srcAnim.numvanims[i]; j++) {
-                int nMappedVert = m_nOrigMap[srcAnim.vanim[i][j].vertex];
+                int nVertex = srcAnim.vanim[i][j].vertex;
+                // m_nOrigMap is sized pOrigSource->numvertices. A vanim vertex id can
+                // legitimately fall outside that range (it simply has no mapping); skip
+                // it rather than reading past the map, which crashes intermittently.
+                if (nVertex < 0 || nVertex >= pOrigSource->numvertices)
+                    continue;
+                int nMappedVert = m_nOrigMap[nVertex];
                 if (nMappedVert != -1)
                     dstAnim.numvanims[i]++;
             }
@@ -489,7 +495,10 @@ void CClampedSource::AddAnimations(const s_source_t *pOrigSource) {
                 dstAnim.vanim[i] = new s_vertanim_t[dstAnim.numvanims[i]];
                 int nvanim = 0;
                 for (int j = 0; j < srcAnim.numvanims[i]; j++) {
-                    int nMappedVert = m_nOrigMap[srcAnim.vanim[i][j].vertex];
+                    int nVertex = srcAnim.vanim[i][j].vertex;
+                    if (nVertex < 0 || nVertex >= pOrigSource->numvertices)
+                        continue;
+                    int nMappedVert = m_nOrigMap[nVertex];
                     if (nMappedVert != -1) {
                         memcpy(&dstAnim.vanim[i][nvanim], &srcAnim.vanim[i][j], sizeof(s_vertanim_t));
                         dstAnim.vanim[i][nvanim].vertex = nMappedVert;

@@ -14,6 +14,9 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 > [!WARNING]
 > **Collision compile accuracy may vary.** The standalone `$collisionmodel` and `$collisionjoints` pipeline (which no longer requires vphysics.dll) is built from a combination of open-source references and reverse engineering. References used: [VPhysics-Jolt](https://github.com/misyltoad/VPhysics-Jolt), [Gmod-vphysics](https://github.com/DrChat/Gmod-vphysics), and [Valve Developer Wiki - VPhysics](https://developer.valvesoftware.com/wiki/VPhysics). Its output may not be fully consistent with what official Valve studiomdl produces. If you encounter incorrect physics shapes, unexpected behavior, or compilation differences, please report them as issues.
 
+> [!NOTE]
+> **"Skipped N flex vertex deltas with no matching model vertex" is normal on complex flex/morph characters.** When a model uses `$lod` decimation, verts removed at lower LODs no longer have anywhere for their flex/morph deltas to go, so those deltas are skipped during compile. This is expected and harmless - the affected verts no longer exist. It generally does not occur on simpler models such as props. Only worth investigating if a specific morph visibly loses movement in-game.
+
 
 ## Features
 

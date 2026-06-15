@@ -93,20 +93,22 @@ Quality knob. **Lower** values produce a tighter fit with **more** convex pieces
 this maps to the decomposer's allowed volume error (about 0.1% at `0.0` up to ~10%
 at `1.0`). A value around `0.02` - `0.1` is a reasonable starting point.
 
-**`hull <i>`** (int, default `1`)
+**`hull <i>`** (int, default `1`, range `1` - `8`)
 
 Hard cap on the number of convex pieces produced for this request. Source has a
 strict per-solid collision budget; keep this modest. `hulls` is accepted as an
-alias. If a request exceeds the collision block's `$maxconvexpieces` limit, a
-`COSTLY GENERATED COLLISION` warning is printed (the pieces are still written).
+alias. Values are clamped to `1` - `8`. If a request exceeds the collision block's
+`$maxconvexpieces` limit, a `COSTLY GENERATED COLLISION` warning is printed (the
+pieces are still written).
 
-**`maxverts <i>`** (int, default `16`)
+**`maxverts <i>`** (int, default `16`, range `4` - `128`)
 
 Maximum number of vertices in each generated convex hull - this is the **detail /
 polygon count** knob. **Lower** values produce simpler, lower-poly hulls (and are
 easier for the physics packer to seal); **higher** values follow the source shape
-more closely. `verts` is accepted as an alias. Note this is separate from `hull`,
-which controls the *number* of pieces, not the detail of each piece. Minimum `4`.
+more closely. `verts` is accepted as an alias. Values are clamped to `4` - `128`.
+Note this is separate from `hull`, which controls the *number* of pieces, not the
+detail of each piece.
 
 **`cullweight <f>`** (float `0.0` - `1.0`, default `0.42`, `$generatejoint` only)
 
