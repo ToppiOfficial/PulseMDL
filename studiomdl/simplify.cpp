@@ -2267,19 +2267,11 @@ static void ComputeVertexAnimationSpeed(s_flexkey_t &flexKey) {
 //-----------------------------------------------------------------------------
 // Purpose: map the vertex animations to their equivalent vertex in the base animations
 //-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
-// Returns true if a vertex-animation vertex id is safe to use as an index into
-// the per-source vanim arrays (vanim_flag / vanim_mapcount / vanim_map), all of
-// which are allocated with pVSource->numvertices entries.
-//
-// A vanim vertex id can legitimately fall outside [0, numvertices) - for example
-// eyeball verts or morph data that does not line up 1:1 with the drawn mesh - and
-// existing code (see the $staticproppose path) simply skips those. Indexing the
-// arrays blindly with such an id reads/writes off the end of the heap allocation,
-// which manifests as an intermittent EXCEPTION_ACCESS_VIOLATION: the over-read
-// only faults on the runs where the buffer happens to sit against an unmapped
-// page. Callers must skip the vanim when this returns false.
-//-----------------------------------------------------------------------------
+// True if a vanim vertex id is in range for the per-source vanim arrays
+// (vanim_flag / vanim_mapcount / vanim_map), all sized pVSource->numvertices.
+// Ids can legitimately fall outside (e.g. $lod-removed or eyeball verts); callers
+// skip those, matching the $staticproppose path. Indexing blindly reads off the
+// heap allocation -> intermittent crash.
 static bool IsValidVAnimVertex(const s_source_t *pVSource, int nVertex) {
     return (nVertex >= 0 && nVertex < pVSource->numvertices);
 }
@@ -2459,8 +2451,7 @@ static void AllocateDestVAnim(const s_source_t *pVSource, s_flexkey_t &flexKey, 
     // count total possible remapped animations
     int nNumDestVAnims = 0;
     for (int m = 0; m < nVAnimCount; m++) {
-        // vanim_mapcount is sized pVSource->numvertices; skip ids outside that range
-        // (must match the skip in the remap loop below so the allocation size agrees).
+        // must match the skip in the remap loop so this count and the fill agree
         if (!IsValidVAnimVertex(pVSource, pVAnim[m].vertex))
             continue;
         nNumDestVAnims += pVSourceAnim->vanim_mapcount[pVAnim[m].vertex];
@@ -2575,9 +2566,7 @@ void RemapVertexAnimations() {
             float flSide, flScale;
             ComputeSideAndScale(g_flexkey[i], psrcanim, &flSide, &flScale);
 
-            // Skip vanim verts outside [0, numvertices) - they have no entry in the
-            // map arrays (sized numvertices). Must match the skip in AllocateDestVAnim
-            // above so we never write past the allocated dest buffer.
+            // must match the skip in AllocateDestVAnim or we write past the dest buffer
             if (!IsValidVAnimVertex(pvsource, psrcanim->vertex))
                 continue;
 
@@ -2753,10 +2742,7 @@ static void RemapVertexAnimationsNewVersion() {
         s_vertanim_t *pDestVAnim = g_flexkey[i].vanim;
 
         for (int m = 0; m < nNumSrcVAnims; m++, pSrcVAnim++) {
-            // A vanim vertex id outside [0, numvertices) has no entry in the vertex map
-            // (it does not exist in the model - e.g. removed by $lod decimation), so it
-            // cannot be applied. Skip it; indexing the map arrays with it reads off the
-            // end of the allocation and crashes intermittently.
+            // verts with no model vertex (e.g. $lod-removed) can't be applied; skip
             if (!IsValidVAnimVertex(pVSource, pSrcVAnim->vertex)) {
                 nSkippedUnmapped++;
                 continue;
@@ -2782,7 +2768,7 @@ static void RemapVertexAnimationsNewVersion() {
                     g_flexkey[i].vanimtype = STUDIO_VERT_ANIM_WRINKLE;
                 }
 
-                // count all the unique verts that actually move (pDoesMove is sized MAXSTUDIOSRCVERTS)
+                // pDoesMove is sized MAXSTUDIOSRCVERTS; an out-of-range map is corruption
                 if (pDestVAnim->vertex < 0 || pDestVAnim->vertex >= MAXSTUDIOSRCVERTS) {
                     MdlError("Vertex animation '%s' in source '%s' mapped to vertex %d, "
                              "out of range [0,%d).\n",
@@ -2807,9 +2793,7 @@ static void RemapVertexAnimationsNewVersion() {
     }
 
     if (nSkippedUnmapped > 0) {
-        // Usually harmless: these verts were removed from the model (commonly by $lod
-        // decimation) so their flex deltas have nowhere to go. Only worth investigating
-        // if a morph visibly loses movement.
+        // usually harmless ($lod-removed verts); investigate only if a morph loses movement
         MdlWarning("Skipped %d flex vertex deltas with no matching model vertex "
                    "(verts removed from the model, e.g. by $lod decimation).\n", nSkippedUnmapped);
     }
@@ -5992,8 +5976,7 @@ static void InitRemappedVertex(s_source_t *pSource, matrix3x4_t *pDestBoneToWorl
     vdest.Init();
     ndest.Init();
 
-    // numbones is capped at the per-vertex weight limit; a corrupted higher value
-    // would read past the fixed-size bone[]/weight[] arrays below.
+    // clamp to the per-vertex weight limit; a corrupt count would read past bone[]/weight[]
     int nNumBones = srcVertex.boneweight.numbones;
     if (nNumBones > MAXSTUDIOBONEWEIGHTS)
         nNumBones = MAXSTUDIOBONEWEIGHTS;
@@ -6003,9 +5986,7 @@ static void InitRemappedVertex(s_source_t *pSource, matrix3x4_t *pDestBoneToWorl
         // src bone
         int q = srcVertex.boneweight.bone[n];
 
-        // A local bone index outside the source's bone table would index
-        // boneLocalToGlobal[] (and later pDestBoneToWorld[]/g_bonetable[]) out of
-        // range - a large page-aligned read that crashes intermittently. Skip it.
+        // out-of-range local bone would index boneLocalToGlobal[] off the end
         if (q < 0 || q >= pSource->numbones)
             continue;
 
@@ -6018,7 +5999,7 @@ static void InitRemappedVertex(s_source_t *pSource, matrix3x4_t *pDestBoneToWorl
             // printf("%s:%s (%d) missing global\n", psource->filename, psource->localBone[q].name, q );
         }
 
-        // Defend the global index too before it indexes pDestBoneToWorld[]/g_bonetable[].
+        // guard before indexing pDestBoneToWorld[]/g_bonetable[]
         if (k < 0 || k >= g_StudioMdlContext.numbones)
             continue;
 
@@ -6089,11 +6070,9 @@ void RemapVerticesToGlobalBones() {
         BuildRawTransforms(pSource, pSourceAnim->animationname, 0, srcBoneToWorld);
         TranslateAnimations(pSource, srcBoneToWorld, destBoneToWorld);
 
-        // Reset before sizing: m_GlobalVertices may already be populated (e.g. a
-        // $rendermesh filter rebuilds it earlier). Appending without clearing would
-        // leave a second, uninitialized half (garbage boneweight.numbones) that later
-        // passes such as ApplyMoveWeightQueue read, causing an intermittent crash.
-        // The loop below fully initializes exactly numvertices entries.
+        // Clear first: $rendermesh may have already populated this. Appending without
+        // clearing leaves an uninitialized second half that ApplyMoveWeightQueue later
+        // reads as garbage -> intermittent crash. The loop below fills exactly numvertices.
         pSource->m_GlobalVertices.RemoveAll();
         pSource->m_GlobalVertices.AddMultipleToTail(pSource->numvertices);
 
@@ -6118,10 +6097,7 @@ void RemapVerticesToGlobalBones() {
                 s_vertanim_t *pVertAnims = pAnim->vanim[nFrameIndex];
                 for (int nVertexIndex = 0; nVertexIndex < nVertexCount; ++nVertexIndex) {
                     s_vertanim_t &vertAnim = pVertAnims[nVertexIndex];
-                    // vertAnim.vertex indexes pSource->vertex[] and m_GlobalVertices[],
-                    // both sized pSource->numvertices. A vanim vertex id outside that
-                    // range (e.g. a vert removed by $lod decimation) would read off the
-                    // end of those arrays - an intermittent EXCEPTION_ACCESS_VIOLATION.
+                    // indexes pSource->vertex[]/m_GlobalVertices[] (sized numvertices)
                     if (vertAnim.vertex < 0 || vertAnim.vertex >= pSource->numvertices)
                         continue;
                     const s_vertexinfo_t &vertex = pSource->vertex[vertAnim.vertex];
@@ -8526,9 +8502,8 @@ void ApplyMoveWeightQueue() {
             for (int j = 0; j < pSource->m_GlobalVertices.Count(); j++) {
                 s_boneweight_t &bw = pSource->m_GlobalVertices[j].boneweight;
 
-                // Defensive: numbones is the bound for the bone[]/weight[] loops below
-                // (fixed-size arrays of MAXSTUDIOBONEWEIGHTS). A corrupt/uninitialized
-                // value would walk far off the end. Skip such an entry rather than crash.
+                // numbones bounds the bone[]/weight[] loops (MAXSTUDIOBONEWEIGHTS); a
+                // corrupt value would walk off the end - skip rather than crash
                 if (bw.numbones < 0 || bw.numbones > MAXSTUDIOBONEWEIGHTS)
                     continue;
 

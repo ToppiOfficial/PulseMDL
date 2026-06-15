@@ -746,10 +746,8 @@ static void RemapVertexAnimations( s_source_t *pSource, int *pVListToDesired )
 			for ( int k = 0; k < nVAnimCount; ++k )
 			{
 				// NOTE: vertex animations are model relative, not mesh relative.
-				// A vanim vertex id outside [0, numvertices) (e.g. a vert removed by
-				// $lod decimation) has no entry in pVListToDesired; indexing it reads
-				// off the end of the array. Leave such ids unchanged - they are culled
-				// later by the downstream vanim remap bounds checks.
+				// Ids outside numvertices ($lod-removed) have no pVListToDesired entry;
+				// leave unchanged, culled later by the downstream vanim bounds checks.
 				int oldVtx = temp[k];
 				if ( oldVtx < 0 || oldVtx >= pSource->numvertices )
 					continue;

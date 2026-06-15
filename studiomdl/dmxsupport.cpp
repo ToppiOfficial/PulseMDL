@@ -1346,12 +1346,9 @@ static void UpdateChannels(CUtlVector<IDmeOperator *> &operators, CDmeChannelsCl
 //-----------------------------------------------------------------------------
 static void ComputeFramePose(s_source_t *pSource, s_sourceanim_t *pSourceAnim, int nFrame, float flScale,
                              BoneTransformMap_t &boneMap) {
-    // LoadSkeleton returns m_nBoneCount + 1 (it appends a default root), so
-    // pSource->numbones is one larger than boneMap.m_nBoneCount. BuildRawTransforms
-    // later iterates k < pSource->numbones, so the per-frame array must be sized for
-    // numbones - otherwise the trailing default-root slot is read past the end of the
-    // allocation (an intermittent EXCEPTION_ACCESS_VIOLATION). Allocate numbones and
-    // leave the unfilled root slot zero-initialized, matching LoadBindPose.
+    // Size for numbones, not m_nBoneCount: LoadSkeleton returns m_nBoneCount + 1
+    // (default root) and BuildRawTransforms iterates k < numbones, so a smaller array
+    // is read past the end. Trailing root slot stays zero-initialized (like LoadBindPose).
     pSourceAnim->rawanim[nFrame] = (s_bone_t *) calloc(pSource->numbones, sizeof(s_bone_t));
 
     const int nFillCount = MIN(boneMap.m_nBoneCount, pSource->numbones);
