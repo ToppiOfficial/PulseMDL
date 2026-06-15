@@ -1122,7 +1122,8 @@ namespace OptimizedModel {
     void COptimizedModel::ComputeStripGroupFlags(StripGroup_t *pStripGroup, bool bIsHWSkinned, bool bIsFlexed) {
         pStripGroup->flags = 0;
         if (bIsFlexed) {
-            pStripGroup->flags |= STRIPGROUP_IS_DELTA_FLEXED;    // Going forward, DX9 models are delta flexed
+            pStripGroup->flags |= STRIPGROUP_IS_FLEXED;          // software flex (dx80/sw)
+            pStripGroup->flags |= STRIPGROUP_IS_DELTA_FLEXED;    // hardware delta flex (dx90)
         }
         if (bIsHWSkinned) {
             pStripGroup->flags |= STRIPGROUP_IS_HWSKINNED;

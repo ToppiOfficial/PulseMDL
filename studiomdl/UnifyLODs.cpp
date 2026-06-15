@@ -1215,8 +1215,8 @@ static s_source_t *GenerateDecimatedSource(const s_source_t *pSrc, float factor,
     }
 
     if (!g_StudioMdlContext.quiet) {
-        printf("decimatemodel: %d -> %d faces (factor %.2f, error %.4f)\n",
-               pSrc->numfaces, nTotalNewFaces, factor, resultError);
+        printf("decimatemodel: %d -> %d faces (factor %.2f)\n",
+               pSrc->numfaces, nTotalNewFaces, factor);
     }
 
     return pDst;

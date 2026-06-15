@@ -10,7 +10,7 @@
 void TokenError(const char *fmt, ...);
 void MdlError(const char *fmt, ...);
 void MdlWarning(const char *fmt, ...);
-void MdlExceptionFilter(unsigned long code);
+void MdlExceptionFilter(struct _EXCEPTION_POINTERS *ExceptionInfo);
 long __stdcall VExceptionFilter(struct _EXCEPTION_POINTERS *ExceptionInfo);
 
 class CMdlLoggingListener : public CCmdLibStandardLoggingListener {

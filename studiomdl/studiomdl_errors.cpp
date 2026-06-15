@@ -4,6 +4,7 @@
 
 #include <processthreadsapi.h>
 #include <errhandlingapi.h>
+#include <libloaderapi.h>
 #include "studiomdl_errors.h"
 #include "common/scriplib.h"
 #include "studiomdl/studiomdl.h"
@@ -137,8 +138,47 @@ void CMdlLoggingListener::Log(const LoggingContext_t *pContext, const tchar *pMe
 
 //#ifndef _DEBUG
 
-void MdlHandleCrash(const char *pMessage, bool bAssert) {
-    MdlError("'%s' (assert: %d)\n", pMessage, bAssert);
+// Resolve a code address to "module.dll+0xOFFSET". Returns false if it can't.
+static bool MdlResolveModule(void *pAddr, char *pOut, size_t outLen) {
+    HMODULE hMod = NULL;
+    if (!GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            (LPCSTR) pAddr, &hMod) || !hMod)
+        return false;
+
+    char path[MAX_PATH];
+    if (!GetModuleFileNameA(hMod, path, sizeof(path)))
+        return false;
+
+    // keep just the file name, not the full path
+    const char *pName = path;
+    for (const char *p = path; *p; ++p)
+        if (*p == '\\' || *p == '/')
+            pName = p + 1;
+
+    uintptr_t offset = (uintptr_t) pAddr - (uintptr_t) hMod;
+    Q_snprintf(pOut, outLen, "%s+0x%llX", pName, (unsigned long long) offset);
+    return true;
+}
+
+// pAddr   - faulting instruction address (ExceptionAddress)
+// pDetail - optional extra clause (e.g. "reading address 0x...") or NULL
+void MdlHandleCrash(const char *pMessage, void *pAddr, const char *pDetail, bool bAssert) {
+    char module[MAX_PATH + 32];
+    if (pAddr && MdlResolveModule(pAddr, module, sizeof(module))) {
+        MdlError("'%s' at 0x%p (%s)%s%s (assert: %d)\n",
+                 pMessage, pAddr, module,
+                 pDetail ? " " : "", pDetail ? pDetail : "",
+                 bAssert);
+    } else if (pAddr) {
+        MdlError("'%s' at 0x%p%s%s (assert: %d)\n",
+                 pMessage, pAddr,
+                 pDetail ? " " : "", pDetail ? pDetail : "",
+                 bAssert);
+    } else {
+        MdlError("'%s' (assert: %d)\n", pMessage, bAssert);
+    }
 }
 
 // This is called if we crash inside our crash handler. It just terminates the process immediately.
@@ -147,11 +187,25 @@ LONG __stdcall MdlSecondExceptionFilter(struct _EXCEPTION_POINTERS *ExceptionInf
     return EXCEPTION_EXECUTE_HANDLER; // (never gets here anyway)
 }
 
-void MdlExceptionFilter(unsigned long code) {
+void MdlExceptionFilter(struct _EXCEPTION_POINTERS *ExceptionInfo) {
     // This is called if we crash inside our crash handler. It just terminates the process immediately.
     SetUnhandledExceptionFilter(MdlSecondExceptionFilter);
 
-    //DWORD code = ExceptionInfo->ExceptionRecord->ExceptionCode;
+    unsigned long code = ExceptionInfo->ExceptionRecord->ExceptionCode;
+    void *pAddr = ExceptionInfo->ExceptionRecord->ExceptionAddress;
+
+    // For an access violation, ExceptionInformation[0] is the operation
+    // (0 read, 1 write, 8 DEP) and [1] is the address that was accessed.
+    char detail[64];
+    const char *pDetail = NULL;
+    if (code == EXCEPTION_ACCESS_VIOLATION &&
+        ExceptionInfo->ExceptionRecord->NumberParameters >= 2) {
+        ULONG_PTR op = ExceptionInfo->ExceptionRecord->ExceptionInformation[0];
+        ULONG_PTR bad = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
+        const char *pVerb = (op == 1) ? "writing" : (op == 8) ? "executing" : "reading";
+        Q_snprintf(detail, sizeof(detail), "%s address 0x%p", pVerb, (void *) bad);
+        pDetail = detail;
+    }
 
 #define ERR_RECORD(name) { name, #name }
     struct {
@@ -187,11 +241,11 @@ void MdlExceptionFilter(unsigned long code) {
         int i;
         for (i = 0; i < nErrors; i++) {
             if (errors[i].code == code)
-                MdlHandleCrash(errors[i].pReason, true);
+                MdlHandleCrash(errors[i].pReason, pAddr, pDetail, true);
         }
 
         if (i == nErrors) {
-            MdlHandleCrash("Unknown reason", true);
+            MdlHandleCrash("Unknown reason", pAddr, pDetail, true);
         }
     }
 
@@ -199,6 +253,6 @@ void MdlExceptionFilter(unsigned long code) {
 }
 
 LONG __stdcall VExceptionFilter(struct _EXCEPTION_POINTERS *ExceptionInfo) {
-    MdlExceptionFilter(ExceptionInfo->ExceptionRecord->ExceptionCode);
+    MdlExceptionFilter(ExceptionInfo);
     return EXCEPTION_EXECUTE_HANDLER; // (never gets here anyway)
 }
