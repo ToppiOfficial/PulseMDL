@@ -3885,6 +3885,96 @@ void Cmd_DefineBone() {
     g_numimportbones++;
 }
 
+//-----------------------------------------------------------------------------
+// $rotatebone <bonename> <rx ry rz> [local|world]
+//   Rotates a bone's bind pose. local (DEFAULT) = about the bone's local axes;
+//   world = about the bone's own origin using world-aligned axes. Mesh stays
+//   undeformed at rest and animations remain visually identical (see
+//   ApplyBoneTransformEdits in simplify.cpp). Bone is resolved later, since the
+//   global bone table does not exist yet at parse time.
+//-----------------------------------------------------------------------------
+void Cmd_RotateBone() {
+    if (g_numbonetransformedits >= MAX_BONE_TRANSFORM_EDITS)
+        TokenError("$rotatebone/$movebone: exceeded combined limit of %d\n", MAX_BONE_TRANSFORM_EDITS);
+
+    s_bonetransformedit_t &e = g_bonetransformedit[g_numbonetransformedits];
+    memset(&e, 0, sizeof(e));
+    e.kind = BONEXFORM_ROTATE;
+    e.space = BONEXFORM_LOCAL;        // rotate default = local
+
+    GetToken(false);
+    strcpyn(e.name, token);
+    GetToken(false);
+    e.v[0] = verify_atof(token);
+    GetToken(false);
+    e.v[1] = verify_atof(token);
+    GetToken(false);
+    e.v[2] = verify_atof(token);
+
+    while (TokenAvailable()) {
+        GetToken(false);
+        if (!V_stricmp(token, "world"))
+            e.space = BONEXFORM_WORLD;
+        else if (!V_stricmp(token, "local"))
+            e.space = BONEXFORM_LOCAL;
+        else if (!V_stricmp(token, "ignorehitbox"))
+            e.ignoreHitbox = true;
+        else {
+            UnGetToken();
+            break;
+        }
+    }
+
+    e.linecount = g_StudioMdlContext.iLinecount;
+    g_numbonetransformedits++;
+}
+
+//-----------------------------------------------------------------------------
+// $movebone <bonename> <x y z> [local|world] [moveweight <residualbone>]
+//   Translates a bone's bind pose. world (DEFAULT) = along world/model axes;
+//   local = along the bone's local axes. Optional moveweight reassigns lost
+//   vertex weight on the moved bone to <residualbone> (see ApplyMoveWeightQueue).
+//-----------------------------------------------------------------------------
+void Cmd_MoveBone() {
+    if (g_numbonetransformedits >= MAX_BONE_TRANSFORM_EDITS)
+        TokenError("$rotatebone/$movebone: exceeded combined limit of %d\n", MAX_BONE_TRANSFORM_EDITS);
+
+    s_bonetransformedit_t &e = g_bonetransformedit[g_numbonetransformedits];
+    memset(&e, 0, sizeof(e));
+    e.kind = BONEXFORM_MOVE;
+    e.space = BONEXFORM_WORLD;        // move default = world
+
+    GetToken(false);
+    strcpyn(e.name, token);
+    GetToken(false);
+    e.v[0] = verify_atof(token);
+    GetToken(false);
+    e.v[1] = verify_atof(token);
+    GetToken(false);
+    e.v[2] = verify_atof(token);
+
+    while (TokenAvailable()) {
+        GetToken(false);
+        if (!V_stricmp(token, "world")) {
+            e.space = BONEXFORM_WORLD;
+        } else if (!V_stricmp(token, "local")) {
+            e.space = BONEXFORM_LOCAL;
+        } else if (!V_stricmp(token, "moveweight")) {
+            e.hasMoveWeight = true;
+            GetToken(false);
+            strcpyn(e.residualbone, token);
+        } else if (!V_stricmp(token, "ignorehitbox")) {
+            e.ignoreHitbox = true;
+        } else {
+            UnGetToken();
+            break;
+        }
+    }
+
+    e.linecount = g_StudioMdlContext.iLinecount;
+    g_numbonetransformedits++;
+}
+
 bool ParseJiggleAngleConstraint(s_jigglebone_t *jiggleInfo) {
     jiggleInfo->data.flags |= JIGGLE_HAS_ANGLE_CONSTRAINT;
 
@@ -4400,6 +4490,11 @@ void Cmd_SkinnedLODs() {
 void Cmd_AlwaysCollapse() {
     GetToken(false);
     g_collapse.AddToTail(strdup(token));
+}
+
+void Cmd_DoNotCollapse() {
+    GetToken(false);
+    g_DoNotCollapse.AddToTail(strdup(token));
 }
 
 void Cmd_CalcTransitions() {
@@ -5826,6 +5921,16 @@ bool ParseAnimationToken(s_animation_t *panim) {
 
     if (!Q_stricmp("ignorescale", token)) {
         panim->ignorescale = true;
+        return true;
+    }
+
+    if (!Q_stricmp("ignorebonemove", token)) {
+        panim->ignoreBoneMove = true;
+        return true;
+    }
+
+    if (!Q_stricmp("ignorebonerotate", token)) {
+        panim->ignoreBoneRotate = true;
         return true;
     }
 
@@ -8549,6 +8654,7 @@ MDLCommand_t g_Commands[] =
                 {"$collapsebones",                   Cmd_CollapseBones,},
                 {"$nocollapsebones",                 Cmd_NoCollapseBones,},
                 {"$alwayscollapse",                  Cmd_AlwaysCollapse,},
+                {"$donotcollapse",                   Cmd_DoNotCollapse,},
                 {"$proceduralbones",                 Load_ProceduralBones,},
                 {"$skiptransition",                  Cmd_Skiptransition,},
                 {"$calctransitions",                 Cmd_CalcTransitions,},
@@ -8566,6 +8672,8 @@ MDLCommand_t g_Commands[] =
                 {"$insertbone",                      Cmd_InsertHierarchy,},
                 {"$limitrotation",                   Cmd_LimitRotation,},
                 {"$definebone",                      Cmd_DefineBone,},
+                {"$rotatebone",                      Cmd_RotateBone,},
+                {"$movebone",                        Cmd_MoveBone,},
                 {"$jigglebone",                      Cmd_JiggleBone,},
                 {"$includemodel",                    Cmd_IncludeModel,},
                 {"$opaque",                          Cmd_Opaque,},

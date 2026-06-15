@@ -1609,8 +1609,18 @@ ConvertAnimation(const s_source_t *psource, const char *pAnimationName, int fram
 //-----------------------------------------------------------------------------
 // Purpose: copy the raw animation data from the source files into the individual animations
 //-----------------------------------------------------------------------------
+// Per-animation $rotatebone/$movebone opt-out. Defined near ApplyBoneTransformEdits.
+struct s_srcrealignsave_t {
+    int bone;
+    matrix3x4_t saved;
+};
+static bool PushAnimSrcRealignOverride(const s_animation_t *panim, CUtlVector<s_srcrealignsave_t> &saved);
+static void PopAnimSrcRealignOverride(const CUtlVector<s_srcrealignsave_t> &saved);
+
 void RemapAnimations() {
     int i, j;
+
+    CUtlVector<s_srcrealignsave_t> savedRealign;
 
     // copy source animations
     for (i = 0; i < g_numani; i++) {
@@ -1630,6 +1640,10 @@ void RemapAnimations() {
             continue;
         }
 
+        // if this animation opts out of bone edits, temporarily roll back the
+        // relevant srcRealign deltas for the affected bones during conversion
+        bool bOverride = PushAnimSrcRealignOverride(panim, savedRealign);
+
         int n = panim->startframe - pSourceAnim->startframe;
         // printf("%s %d:%d\n", g_panimation[i]->filename, g_panimation[i]->startframe, pSourceAnim->startframe );
         for (j = 0; j < panim->numframes; j++) {
@@ -1639,6 +1653,9 @@ void RemapAnimations() {
                              panim->ignorescale ? panim->scale / g_defaultscale : panim->scale,
                              panim->adjust, panim->rotation, panim->sanim[j]);
         }
+
+        if (bOverride)
+            PopAnimSrcRealignOverride(savedRealign);
     }
 }
 
@@ -3306,6 +3323,13 @@ static bool BoneIsProceduralControl(char const *pname) {
 }
 
 bool BoneShouldCollapse(char const *pname) {
+    // $donotcollapse force-keeps a bone; checked first so it wins over $alwayscollapse
+    for (int k = 0; k < g_DoNotCollapse.Count(); k++) {
+        if (stricmp(g_DoNotCollapse[k], pname) == 0) {
+            return false;
+        }
+    }
+
     for (int k = 0; k < g_collapse.Count(); k++) {
         if (stricmp(g_collapse[k], pname) == 0) {
             return true;
@@ -7914,6 +7938,31 @@ void SetupHitBoxes() {
                 if (k != -1) {
                     set->hitbox[j].bone = k;
 
+                    // $movebone/$rotatebone ... ignorehitbox: compensate this manual
+                    // hitbox by the inverse bind-pose edit so it stays put in world
+                    // space. The hitbox is an OBB whose bone-space transform is
+                    // Rot(angOffsetOrientation) (rotation about the bone origin).
+                    matrix3x4_t invDelta;
+                    if (GetBoneHitboxCompensation(k, invDelta)) {
+                        matrix3x4_t boxRot, M, Mrot;
+                        AngleMatrix(set->hitbox[j].angOffsetOrientation, boxRot);
+                        ConcatTransforms(invDelta, boxRot, M);   // M = invDelta * Rot(angOff)
+
+                        QAngle angNew;
+                        MatrixAngles(M, angNew);
+
+                        Vector Tm;
+                        MatrixGetColumn(M, 3, Tm);
+                        MatrixCopy(M, Mrot);
+                        MatrixSetColumn(vec3_origin, 3, Mrot);
+                        Vector shift;
+                        VectorIRotate(Tm, Mrot, shift);          // Rot(angNew)^T * Tm
+
+                        set->hitbox[j].bmin += shift;
+                        set->hitbox[j].bmax += shift;
+                        set->hitbox[j].angOffsetOrientation = angNew;
+                    }
+
 #ifdef MDLCOMPILE
                                                                                                                                             // This is temporary
 					// In mdlcompile, hitboxes come in defined in the space of the bone before remapping
@@ -8149,6 +8198,312 @@ static void InjectDummyBindPoseSequence() {
     ProcessSequence(pseq, 1, animations, false);
 }
 
+//-----------------------------------------------------------------------------
+// $rotatebone / $movebone support.
+//
+// These relocate a bone's bind pose late in the pipeline (after RemapBones /
+// RealignBones have built the global skeleton) WITHOUT deforming the rest mesh
+// and WITHOUT changing how animations look. The trick: express the edit as a
+// change of bind frame, delta D = boneToPose^-1 * newBoneToPose, and fold it
+// into srcRealign. TranslateAnimations() applies srcRealign to BOTH the vertex
+// binding (RemapVerticesToGlobalBones) and every animation frame
+// (ConvertAnimation), so:
+//   destBoneToWorld_new = destBoneToWorld_old * D ,  boneToPose_new = boneToPose_old * D
+// and the rest vertex boneToPose * destBoneToWorld^-1 * v is unchanged (the
+// D / D^-1 cancel). This is the same mechanism RealignBones already relies on.
+//-----------------------------------------------------------------------------
+
+struct s_moveweightreq_t {
+    int target;
+    int residual;
+};
+static CUtlVector<s_moveweightreq_t> g_moveWeightQueue;
+
+// Record of each applied bind-pose edit (resolved bone + category + local-frame
+// delta), so animations flagged ignorebonemove/ignorebonerotate can be converted
+// with the relevant deltas rolled back. See PushAnimSrcRealignOverride.
+struct s_appliededit_t {
+    int bone;
+    BoneXformKind kind;
+    matrix3x4_t D;
+};
+static CUtlVector<s_appliededit_t> g_appliedBoneEdits;
+static matrix3x4_t g_origSrcRealign[MAXSTUDIOBONES];   // srcRealign before the first edit to a bone
+static bool g_hasOrigSrcRealign[MAXSTUDIOBONES];
+static bool g_boneEditIgnoreHitbox[MAXSTUDIOBONES];    // bone had an edit with 'ignorehitbox'
+
+static void ComputeNewBindPose(const s_bonetransformedit_t &ed, const matrix3x4_t &B, matrix3x4_t &Bnew) {
+    Vector O;
+    MatrixGetColumn(B, 3, O);
+
+    if (ed.kind == BONEXFORM_ROTATE) {
+        // Use QAngle so rx/ry/rz match the $definebone angle convention.
+        QAngle ang;
+        ang.x = ed.v[0];
+        ang.y = ed.v[1];
+        ang.z = ed.v[2];
+        matrix3x4_t R;
+        AngleMatrix(ang, R);   // rotation only, no translation
+
+        if (ed.space == BONEXFORM_LOCAL) {
+            // rotate about the bone's own local axes; origin preserved
+            ConcatTransforms(B, R, Bnew);
+        } else {
+            // rotate orientation by world axes, pin origin to O
+            matrix3x4_t M;
+            ConcatTransforms(R, B, M);
+            MatrixCopy(M, Bnew);
+            MatrixSetColumn(O, 3, Bnew);
+        }
+    } else {
+        // BONEXFORM_MOVE
+        Vector delta;
+        if (ed.space == BONEXFORM_LOCAL) {
+            // translate along the bone's own axes
+            Vector fwd, left, up;
+            MatrixGetColumn(B, 0, fwd);
+            MatrixGetColumn(B, 1, left);
+            MatrixGetColumn(B, 2, up);
+            delta = fwd * ed.v[0] + left * ed.v[1] + up * ed.v[2];
+        } else {
+            // translate along world/model axes
+            delta.Init(ed.v[0], ed.v[1], ed.v[2]);
+        }
+        MatrixCopy(B, Bnew);
+        MatrixSetColumn(O + delta, 3, Bnew);
+    }
+}
+
+void ApplyBoneTransformEdits() {
+    if (g_numbonetransformedits == 0)
+        return;
+
+    g_moveWeightQueue.RemoveAll();
+    g_appliedBoneEdits.RemoveAll();
+    memset(g_hasOrigSrcRealign, 0, sizeof(g_hasOrigSrcRealign));
+    memset(g_boneEditIgnoreHitbox, 0, sizeof(g_boneEditIgnoreHitbox));
+
+    bool bChanged = false;
+    for (int e = 0; e < g_numbonetransformedits; e++) {
+        const s_bonetransformedit_t &ed = g_bonetransformedit[e];
+        int t = findGlobalBone(ed.name);
+        if (t == -1) {
+            MdlWarning("%s: unknown bone \"%s\" (line %d) - skipped\n",
+                       ed.kind == BONEXFORM_ROTATE ? "$rotatebone" : "$movebone", ed.name, ed.linecount);
+            continue;
+        }
+
+        matrix3x4_t Bold, Bnew;
+        MatrixCopy(g_bonetable[t].boneToPose, Bold);
+        ComputeNewBindPose(ed, Bold, Bnew);
+
+        // local-frame delta D = Bold^-1 * Bnew
+        matrix3x4_t BoldInv, D;
+        MatrixInvert(Bold, BoldInv);
+        ConcatTransforms(BoldInv, Bnew, D);
+
+        // snapshot the pre-edit srcRealign for this bone (once), so per-animation
+        // ignore flags can roll edits back later
+        if (t < MAXSTUDIOBONES && !g_hasOrigSrcRealign[t]) {
+            MatrixCopy(g_bonetable[t].srcRealign, g_origSrcRealign[t]);
+            g_hasOrigSrcRealign[t] = true;
+        }
+
+        // fold the delta into srcRealign so vertices AND animation frames stay
+        // consistent (both consume srcRealign via TranslateAnimations)
+        matrix3x4_t tmp;
+        ConcatTransforms(g_bonetable[t].srcRealign, D, tmp);
+        MatrixCopy(tmp, g_bonetable[t].srcRealign);
+        MatrixCopy(Bnew, g_bonetable[t].boneToPose);
+        bChanged = true;
+
+        s_appliededit_t ae;
+        ae.bone = t;
+        ae.kind = ed.kind;
+        MatrixCopy(D, ae.D);
+        g_appliedBoneEdits.AddToTail(ae);
+
+        if (t < MAXSTUDIOBONES && ed.ignoreHitbox)
+            g_boneEditIgnoreHitbox[t] = true;
+
+        if (ed.kind == BONEXFORM_MOVE && ed.hasMoveWeight) {
+            int r = findGlobalBone(ed.residualbone);
+            if (r == -1) {
+                MdlWarning("$movebone moveweight: unknown residual bone \"%s\" (line %d)\n",
+                           ed.residualbone, ed.linecount);
+            }
+            s_moveweightreq_t req = {t, r};
+            g_moveWeightQueue.AddToTail(req);
+        }
+    }
+
+    if (bChanged) {
+        // Only the moved bones' boneToPose changed; children boneToPose are left
+        // untouched (they stay world-fixed at rest). Rebuild rawLocal/pos/rot for
+        // everything from boneToPose - direct children get recompensated relative
+        // to the new parent frame, unaffected bones are unchanged.
+        RebuildLocalPose();
+    }
+}
+
+// Returns the accumulated bind-pose edit delta applied to a global bone (the
+// ordered product of its $rotatebone/$movebone deltas, such that
+// boneToPose_final = boneToPose_orig * D_total). Returns false if the bone had no
+// edits. Used by the collision builder to keep ragdoll hulls aligned to the edit.
+bool GetAccumulatedBoneEditDelta(int globalBone, matrix3x4_t &outD) {
+    if (globalBone < 0 || globalBone >= MAXSTUDIOBONES || !g_hasOrigSrcRealign[globalBone])
+        return false;
+
+    SetIdentityMatrix(outD);
+    for (int e = 0; e < g_appliedBoneEdits.Count(); e++) {
+        if (g_appliedBoneEdits[e].bone != globalBone)
+            continue;
+        matrix3x4_t tmp;
+        ConcatTransforms(outD, g_appliedBoneEdits[e].D, tmp);
+        MatrixCopy(tmp, outD);
+    }
+    return true;
+}
+
+// Returns true if bone t had a $rotatebone/$movebone with 'ignorehitbox', and
+// outputs Inverse(accumulated edit delta) to pre-apply to the bone's manual hitbox
+// data so the hitbox keeps its original world position despite the bind-pose edit.
+bool GetBoneHitboxCompensation(int globalBone, matrix3x4_t &outInvDelta) {
+    if (globalBone < 0 || globalBone >= MAXSTUDIOBONES || !g_boneEditIgnoreHitbox[globalBone])
+        return false;
+    matrix3x4_t Dtot;
+    if (!GetAccumulatedBoneEditDelta(globalBone, Dtot))
+        return false;
+    MatrixInvert(Dtot, outInvDelta);
+    return true;
+}
+
+// For an animation flagged ignorebonemove/ignorebonerotate, temporarily rewrite
+// the affected bones' srcRealign to exclude the ignored category of edits, so the
+// animation converts as if those edits never happened. Saves the displaced values
+// into 'saved' for PopAnimSrcRealignOverride to restore. Returns true if anything
+// was overridden. A no-op (returns false) when the animation carries no flags or
+// no edits were applied - keeping behavior byte-identical in the common case.
+static bool PushAnimSrcRealignOverride(const s_animation_t *panim, CUtlVector<s_srcrealignsave_t> &saved) {
+    saved.RemoveAll();
+
+    if (!panim->ignoreBoneMove && !panim->ignoreBoneRotate)
+        return false;
+    if (g_appliedBoneEdits.Count() == 0)
+        return false;
+
+    for (int b = 0; b < g_StudioMdlContext.numbones && b < MAXSTUDIOBONES; b++) {
+        if (!g_hasOrigSrcRealign[b])
+            continue;
+
+        // replay only the non-ignored deltas on top of the original srcRealign
+        matrix3x4_t M;
+        MatrixCopy(g_origSrcRealign[b], M);
+        for (int e = 0; e < g_appliedBoneEdits.Count(); e++) {
+            const s_appliededit_t &ae = g_appliedBoneEdits[e];
+            if (ae.bone != b)
+                continue;
+            if (ae.kind == BONEXFORM_MOVE && panim->ignoreBoneMove)
+                continue;
+            if (ae.kind == BONEXFORM_ROTATE && panim->ignoreBoneRotate)
+                continue;
+            matrix3x4_t tmp;
+            ConcatTransforms(M, ae.D, tmp);
+            MatrixCopy(tmp, M);
+        }
+
+        s_srcrealignsave_t s;
+        s.bone = b;
+        MatrixCopy(g_bonetable[b].srcRealign, s.saved);
+        saved.AddToTail(s);
+
+        MatrixCopy(M, g_bonetable[b].srcRealign);
+    }
+
+    return saved.Count() > 0;
+}
+
+static void PopAnimSrcRealignOverride(const CUtlVector<s_srcrealignsave_t> &saved) {
+    for (int i = 0; i < saved.Count(); i++) {
+        MatrixCopy(saved[i].saved, g_bonetable[saved[i].bone].srcRealign);
+    }
+}
+
+void ApplyMoveWeightQueue() {
+    if (g_moveWeightQueue.Count() == 0)
+        return;
+
+    for (int qi = 0; qi < g_moveWeightQueue.Count(); qi++) {
+        const int t = g_moveWeightQueue[qi].target;
+        const int r = g_moveWeightQueue[qi].residual;
+
+        for (int i = 0; i < g_numsources; i++) {
+            s_source_t *pSource = g_source[i];
+            for (int j = 0; j < pSource->m_GlobalVertices.Count(); j++) {
+                s_boneweight_t &bw = pSource->m_GlobalVertices[j].boneweight;
+
+                // only touch vertices influenced by the moved bone
+                int slot = -1;
+                for (int n = 0; n < bw.numbones; n++) {
+                    if (bw.bone[n] == t) {
+                        slot = n;
+                        break;
+                    }
+                }
+                if (slot == -1)
+                    continue;
+
+                // assign any lost (under-normalized) weight to the residual bone
+                float sum = 0.0f;
+                for (int n = 0; n < bw.numbones; n++)
+                    sum += bw.weight[n];
+
+                float shortfall = 1.0f - sum;
+                if (shortfall > 1.0e-4f && r >= 0) {
+                    int rs = -1;
+                    for (int n = 0; n < bw.numbones; n++) {
+                        if (bw.bone[n] == r) {
+                            rs = n;
+                            break;
+                        }
+                    }
+                    if (rs >= 0) {
+                        bw.weight[rs] += shortfall;
+                    } else if (bw.numbones < MAXSTUDIOBONEWEIGHTS) {
+                        bw.bone[bw.numbones] = r;
+                        bw.weight[bw.numbones] = shortfall;
+                        bw.numbones++;
+                    } else {
+                        // 3-bone budget full: evict the smallest non-target slot
+                        int victim = -1;
+                        for (int n = 0; n < bw.numbones; n++) {
+                            if (n == slot)
+                                continue;
+                            if (victim == -1 || bw.weight[n] < bw.weight[victim])
+                                victim = n;
+                        }
+                        if (victim >= 0) {
+                            bw.bone[victim] = r;
+                            bw.weight[victim] += shortfall;
+                        }
+                    }
+                }
+
+                // renormalize to guard against FP drift / overflow eviction
+                sum = 0.0f;
+                for (int n = 0; n < bw.numbones; n++)
+                    sum += bw.weight[n];
+                if (sum > 1.0e-6f) {
+                    for (int n = 0; n < bw.numbones; n++)
+                        bw.weight[n] /= sum;
+                }
+            }
+        }
+    }
+
+    g_moveWeightQueue.RemoveAll();
+}
+
 void SimplifyModel() {
     if (g_nosequence) {
         if (g_StudioMdlContext.modelIntentionallyHasZeroSequences)
@@ -8178,6 +8533,10 @@ void SimplifyModel() {
 
     ConvertBoneTreeCollapsesToReplaceBones();
 
+    // apply $rotatebone / $movebone bind-pose edits before the $definebones
+    // dump so an exported skeleton reflects the edits
+    ApplyBoneTransformEdits();
+
     // export bones
     if (g_definebones) {
         DumpDefineBones();
@@ -8195,6 +8554,9 @@ void SimplifyModel() {
     FixupReplacedBones();
 
     RemapVerticesToGlobalBones();
+
+    // reassign vertex weight lost on moved bones to their residual bone
+    ApplyMoveWeightQueue();
 
     if (g_StudioMdlContext.centerBonesOnVerts) {
         CenterBonesOnVerts();

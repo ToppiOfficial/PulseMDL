@@ -87,6 +87,11 @@ exactly (case-sensitive). Multiple params may appear on the same line.
 Any valid `$animation` sub-parameters to apply to the generated
 `a_reference` animation (fps, loop, delta, frame, ikrule, etc.).
 
+> If the model uses [`$rotatebone`/`$movebone`](rotatebone-movebone.md), those
+> bind-pose edits are baked into `a_reference`/`a_proportions` by default. To keep
+> a rig adjustment out of the proportion delta, add `ignorebonemove` and/or
+> `ignorebonerotate` to **both** `appendreference` and `appendproportions`.
+
 **`appendproportions { ... }`** (optional)
 
 Same as `appendreference` but for `a_proportions`.

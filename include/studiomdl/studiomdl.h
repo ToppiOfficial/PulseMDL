@@ -283,6 +283,28 @@ struct s_importbone_t {
 EXTERN std::array<s_importbone_t, MAXSTUDIOSRCBONES> g_importbone;
 
 
+// $rotatebone / $movebone - late bind-pose edits. Capped to a small combined budget.
+#define MAX_BONE_TRANSFORM_EDITS 16
+enum BoneXformKind { BONEXFORM_ROTATE, BONEXFORM_MOVE };
+enum BoneXformSpace { BONEXFORM_LOCAL, BONEXFORM_WORLD };
+struct s_bonetransformedit_t {
+    char name[MAXSTUDIONAME];
+    BoneXformKind kind;
+    BoneXformSpace space;
+    float v[3];                      // rotate: euler degrees ; move: units
+    bool hasMoveWeight;
+    char residualbone[MAXSTUDIONAME];
+    bool ignoreHitbox;               // keep this bone's manual hitboxes in place
+    int linecount;
+};
+EXTERN std::array<s_bonetransformedit_t, MAX_BONE_TRANSFORM_EDITS> g_bonetransformedit;
+EXTERN int g_numbonetransformedits;
+void ApplyBoneTransformEdits();
+void ApplyMoveWeightQueue();
+bool GetAccumulatedBoneEditDelta(int globalBone, matrix3x4_t &outD);
+bool GetBoneHitboxCompensation(int globalBone, matrix3x4_t &outInvDelta);
+
+
 EXTERN int g_numincludemodels;
 struct s_includemodel_t {
     char name[MAXSTUDIONAME];
@@ -632,6 +654,8 @@ struct s_animation_t {
     bool doesOverride;
     bool nocull;
     bool ignorescale;
+    bool ignoreBoneMove;    // ignore $movebone bind-pose edits when converting this animation
+    bool ignoreBoneRotate;  // ignore $rotatebone bind-pose edits when converting this animation
     int index;
     char name[MAXSTUDIONAME];
     char filename[MAX_PATH];
@@ -1777,6 +1801,8 @@ private:
 EXTERN CUtlVector<LodScriptData_t> g_ScriptLODs;
 
 EXTERN CUtlVector<char *> g_collapse;
+
+EXTERN CUtlVector<char *> g_DoNotCollapse;
 
 
 

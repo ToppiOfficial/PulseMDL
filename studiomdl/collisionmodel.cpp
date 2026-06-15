@@ -862,6 +862,23 @@ int CJointedModel::ProcessJointedModel()
 		bonespaceVerts.SetCount( m_pModel->numvertices );
 		ConvertToBoneSpace( boneIndex, bonespaceVerts );
 
+		// If $rotatebone/$movebone edited this bone's bind pose, the hull is placed
+		// at runtime by the edited g_bonetable transform (boneToPose_orig * D_total).
+		// Pre-multiply by Inverse(D_total) so the hull lands at its pre-edit position
+		// and still tracks the bone in ragdoll. No-op (identity) for unedited bones.
+		matrix3x4_t boneEditDelta;
+		if ( GetAccumulatedBoneEditDelta( m_pModel->boneLocalToGlobal[boneIndex], boneEditDelta ) )
+		{
+			matrix3x4_t boneEditDeltaInv;
+			MatrixInvert( boneEditDelta, boneEditDeltaInv );
+			for ( int vi = 0; vi < bonespaceVerts.Count(); vi++ )
+			{
+				Vector corrected;
+				VectorTransform( bonespaceVerts[vi], boneEditDeltaInv, corrected );
+				bonespaceVerts[vi] = corrected;
+			}
+		}
+
 		CUtlVector<s_face_t>   faceList;
 		CUtlVector<convexlist_t> convexList;
 		CUtlVector<int>        vertList;
