@@ -1714,12 +1714,6 @@ void Option_Flexrule(s_model_t * /* pmodel */, const char *name) {
     int j = 0;
     int k = 0;
 
-    s_flexrule_t *pRule = &g_flexrule[g_numflexrules++];
-
-    if (g_numflexrules > MAXSTUDIOFLEXRULES) {
-        TokenError("Too many flex rules (max %d)\n", MAXSTUDIOFLEXRULES);
-    }
-
     int flexdesc;
     for (flexdesc = 0; flexdesc < g_numflexdesc; flexdesc++) {
         if (stricmp(name, g_flexdesc[flexdesc].FACS) == 0) {
@@ -1730,6 +1724,39 @@ void Option_Flexrule(s_model_t * /* pmodel */, const char *name) {
     if (flexdesc >= g_numflexdesc) {
         TokenError("Rule for unknown flex %s\n", name);
     }
+
+    // A rule for this flex descriptor may already exist - the same DMX
+    // combination operator is re-processed once per LOD source load (and per
+    // $body/$model that references the same DMX), so without this guard the
+    // identical flex rules accumulate (e.g. 4 copies for a 2-LOD model). Mirror
+    // the dedup already done in AddBodyFlexRule(): skip the duplicate, draining
+    // the rest of the expression line so the tokenizer stays in sync.
+    for (j = 0; j < g_numflexrules; j++) {
+        if (g_flexrule[j].flex == flexdesc) {
+            // =
+            GetToken(false);
+            bool linecontinueSkip = false;
+            while (linecontinueSkip || TokenAvailable()) {
+                GetExprToken(linecontinueSkip);
+                linecontinueSkip = false;
+                if (token[0] == '\\') {
+                    if (!GetToken(false) || token[0] != '\\') {
+                        TokenError("unknown expression token '\\%s\n", token);
+                    }
+                    linecontinueSkip = true;
+                } else if (token[0] == '%') {
+                    GetExprToken(false);
+                }
+            }
+            return;
+        }
+    }
+
+    if (g_numflexrules >= MAXSTUDIOFLEXRULES) {
+        TokenError("Too many flex rules (max %d)\n", MAXSTUDIOFLEXRULES);
+    }
+
+    s_flexrule_t *pRule = &g_flexrule[g_numflexrules++];
 
     pRule->flex = flexdesc;
     pRule->numops = 0;
