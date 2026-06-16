@@ -18,7 +18,7 @@ Place these commands at the end of the QC.
 
 ```
 $rotatebone <bonename> <rx ry rz> [local | world] [ignorehitbox]
-$movebone   <bonename> <x y z>    [local | world] [moveweight <residualbone>] [ignorehitbox]
+$movebone   <bonename> <x y z>    [local | world] [moveweight <residualbone> [factor]] [ignorehitbox]
 ```
 
 ## $rotatebone
@@ -47,16 +47,32 @@ $movebone "ValveBiped.Bip01_Pelvis" 0 0 2
 $movebone "ValveBiped.Bip01_L_Hand" 1 0 0 local
 ```
 
-### moveweight <residualbone>
+### moveweight <residualbone> [factor]
 
-Optional trailing clause on `$movebone` only. After the bone is offset, any
-vertex influenced by the moved bone that ends up under-normalized (lost weight)
-has the missing weight assigned to `<residualbone>`, and its weights are
-renormalized to 1.0. If the vertex already uses the full 3-bone budget, the
-smallest non-target influence is evicted in favor of the residual bone.
+Optional trailing clause on `$movebone` only. The bind-pose edit itself is
+weight-preserving - it relocates the pivot without re-skinning anything - so on
+its own a `$movebone` never changes which bones drive a vertex. `moveweight` is
+the opt-in to actually **re-skin**: every vertex weighted to the moved bone has
+`[factor]` of that influence **transferred to `<residualbone>`**, and its weights
+are renormalized to 1.0. If the vertex is already weighted to `<residualbone>`,
+the transferred share is merged into it.
+
+`[factor]` is **optional** (default **`0.55`**) and clamped to `[0, 1]`:
+
+- **`1.0`** - full transfer; the moved bone's influence moves entirely to the
+  residual bone (the residual replaces it).
+- **`0.5`** - half stays on the moved bone, half goes to the residual (a blend).
+- **`0.0`** - no transfer (a no-op).
+
+Omitting the float (legacy `moveweight <residualbone>`) uses the `0.55` default,
+so existing QC keeps working.
+
+Because the rest position was already baked from the original weights, the
+**rest mesh stays visually identical** - only the animation deformation of the
+re-skinned fraction now follows `<residualbone>` instead of the moved bone.
 
 ```
-$movebone "ValveBiped.Bip01_L_Forearm" 0 0 -1 local moveweight "ValveBiped.Bip01_L_UpperArm"
+$movebone "ValveBiped.Bip01_L_Forearm" 0 0 -1 local moveweight "ValveBiped.Bip01_L_UpperArm" 1.0
 ```
 
 > Note: `moveweight` is the experimental part of this feature. The default
@@ -87,7 +103,7 @@ opposite"):
   box keeps its world orientation.
 
 ```
-$movebone "ValveBiped.Bip01_L_Foot" 0 0 -2 world moveweight "ValveBiped.Bip01_L_Calf" ignorehitbox
+$movebone "ValveBiped.Bip01_L_Foot" 0 0 -2 world moveweight "ValveBiped.Bip01_L_Calf" 1.0 ignorehitbox
 $rotatebone "ValveBiped.Bip01_Head1" 0 0 15 ignorehitbox
 ```
 
@@ -118,8 +134,8 @@ For a clean `subtract`, set the flag on **both** the reference and the proportio
 animation:
 
 ```
-$movebone "ValveBiped.Bip01_L_Foot" 0 0 -2 world moveweight "ValveBiped.Bip01_L_Calf"
-$movebone "ValveBiped.Bip01_R_Foot" 0 0 -2 world moveweight "ValveBiped.Bip01_R_Calf"
+$movebone "ValveBiped.Bip01_L_Foot" 0 0 -2 world moveweight "ValveBiped.Bip01_L_Calf" 1.0
+$movebone "ValveBiped.Bip01_R_Foot" 0 0 -2 world moveweight "ValveBiped.Bip01_R_Calf" 1.0
 
 $deltaproportions {
     referencepose  "female_01_reference.smd" 0

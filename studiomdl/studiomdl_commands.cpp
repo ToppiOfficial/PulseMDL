@@ -3957,10 +3957,11 @@ void Cmd_RotateBone() {
 }
 
 //-----------------------------------------------------------------------------
-// $movebone <bonename> <x y z> [local|world] [moveweight <residualbone>]
+// $movebone <bonename> <x y z> [local|world] [moveweight <residualbone> [factor]]
 //   Translates a bone's bind pose. world (DEFAULT) = along world/model axes;
-//   local = along the bone's local axes. Optional moveweight reassigns lost
-//   vertex weight on the moved bone to <residualbone> (see ApplyMoveWeightQueue).
+//   local = along the bone's local axes. Optional moveweight transfers [factor]
+//   ([0,1], default 0.55) of the moved bone's vertex weight to <residualbone>
+//   (see ApplyMoveWeightQueue).
 //-----------------------------------------------------------------------------
 void Cmd_MoveBone() {
     if (g_numbonetransformedits >= MAX_BONE_TRANSFORM_EDITS)
@@ -3990,6 +3991,26 @@ void Cmd_MoveBone() {
             e.hasMoveWeight = true;
             GetToken(false);
             strcpyn(e.residualbone, token);
+            // optional factor: fraction of the moved bone's weight handed to the
+            // residual bone (1 = full transfer, 0 = none). Omitted -> 0.55 default,
+            // so legacy QC without the float keeps working.
+            e.moveWeightFactor = 0.55f;
+            if (TokenAvailable()) {
+                GetToken(false);
+                // only consume the token if it parses as a number; otherwise it is
+                // a following keyword (ignorehitbox) - put it back
+                char *endp = nullptr;
+                float f = (float)strtod(token, &endp);
+                if (endp != token && *endp == '\0') {
+                    e.moveWeightFactor = f;
+                    if (e.moveWeightFactor < 0.0f)
+                        e.moveWeightFactor = 0.0f;
+                    else if (e.moveWeightFactor > 1.0f)
+                        e.moveWeightFactor = 1.0f;
+                } else {
+                    UnGetToken();
+                }
+            }
         } else if (!V_stricmp(token, "ignorehitbox")) {
             e.ignoreHitbox = true;
         } else {

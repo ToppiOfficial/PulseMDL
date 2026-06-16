@@ -125,6 +125,48 @@ influence on while still tolerating typical 3-bone blends. Set `0.0` to include 
 vertex that touches the bone at all; raise toward `1.0` for tighter, more separated
 hulls (at the risk of leaving gaps where a strand blends across many bones).
 
+## Welding extra bones into a joint ($addgeneratechild)
+
+`$generatejoint` only pulls geometry weighted to its one named bone. Sometimes you
+want a joint's hull to also swallow a neighbouring bone's geometry **without**
+creating a separate physics joint for it - for example, an ankle joint that should
+also enclose the toe, when you don't want a distinct toe ragdoll bone.
+
+`$addgeneratechild` welds a child bone's weighted geometry into an existing
+`$generatejoint`'s hull. All of the child geometry is transformed into the **parent
+joint bone's** local space and fed into the same decomposition, so the combined
+hull still tracks the parent joint at runtime (the toe geometry moves with the
+ankle). It is a `$collisionjoints` sub-token and may be used as many times as you
+need, including several children on one joint.
+
+```
+$addgeneratechild <joint bone> <child bone> [cullweight <f>]
+```
+
+```
+$collisionjoints "ragdoll" {
+    $generatejoint    "ankle_L" "bodymesh" hull 2 cullweight 0.4
+    $addgeneratechild "ankle_L" "toe_L"
+    $addgeneratechild "ankle_L" "toe_R"
+}
+```
+
+**`<joint bone>`** must name a bone that has a `$generatejoint` in the same block
+(order does not matter - the child line may appear before its `$generatejoint`). If
+no matching `$generatejoint` exists, a warning is printed and the child is ignored.
+
+**`<child bone>`** is the bone whose weighted geometry is added. It must exist in
+the same `$rendermesh` as the joint; if it is not found there, a warning is printed
+and that child is skipped (the joint still generates from its own geometry).
+
+**`cullweight <f>`** is optional and works exactly like the `$generatejoint`
+`cullweight` (see above), but applies to the child bone's vertices. If omitted, the
+child inherits the parent `$generatejoint`'s `cullweight`. `cull` is an alias.
+
+A face is welded into the hull when **each** of its three vertices passes **some**
+kept bone (the joint bone or any of its children) - so bridging faces that span the
+parent and child geometry are included, fusing them into one continuous hull.
+
 ## Overriding source collision
 
 If a `$generatejoint` targets a bone that already has collision from the

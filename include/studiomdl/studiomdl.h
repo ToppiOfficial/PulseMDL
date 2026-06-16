@@ -294,6 +294,7 @@ struct s_bonetransformedit_t {
     float v[3];                      // rotate: euler degrees ; move: units
     bool hasMoveWeight;
     char residualbone[MAXSTUDIONAME];
+    float moveWeightFactor;          // [0,1] fraction of moved-bone weight handed to residual
     bool ignoreHitbox;               // keep this bone's manual hitboxes in place
     int linecount;
 };

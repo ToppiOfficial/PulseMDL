@@ -8276,6 +8276,7 @@ static void InjectDummyBindPoseSequence() {
 struct s_moveweightreq_t {
     int target;
     int residual;
+    float factor;       // [0,1] fraction of target weight handed to residual
 };
 static CUtlVector<s_moveweightreq_t> g_moveWeightQueue;
 
@@ -8392,7 +8393,7 @@ void ApplyBoneTransformEdits() {
                 MdlWarning("$movebone moveweight: unknown residual bone \"%s\" (line %d)\n",
                            ed.residualbone, ed.linecount);
             }
-            s_moveweightreq_t req = {t, r};
+            s_moveweightreq_t req = {t, r, ed.moveWeightFactor};
             g_moveWeightQueue.AddToTail(req);
         }
     }
@@ -8489,6 +8490,15 @@ static void PopAnimSrcRealignOverride(const CUtlVector<s_srcrealignsave_t> &save
     }
 }
 
+// Re-skin step for $movebone ... moveweight <residualbone> <factor>. The bind-pose
+// edit itself is weight-preserving (it only relocates srcRealign/boneToPose,
+// leaving the rest mesh and animations visually identical), so it never drops any
+// weight. moveweight is the explicit ask to hand the moved bone's influence to a
+// residual bone: for every vertex weighted to the moved (target) bone, transfer
+// <factor> of that weight onto the residual bone (1 = full, 0 = none) and
+// renormalize. The rest position was already baked from the original weights in
+// InitRemappedVertex, so the rest mesh is unchanged - only animation deformation
+// of the re-skinned fraction now follows the residual bone.
 void ApplyMoveWeightQueue() {
     if (g_moveWeightQueue.Count() == 0)
         return;
@@ -8496,6 +8506,12 @@ void ApplyMoveWeightQueue() {
     for (int qi = 0; qi < g_moveWeightQueue.Count(); qi++) {
         const int t = g_moveWeightQueue[qi].target;
         const int r = g_moveWeightQueue[qi].residual;
+        const float factor = g_moveWeightQueue[qi].factor;
+
+        // unresolved residual bone (already warned in ApplyBoneTransformEdits), a
+        // self-transfer, or a zero factor is a no-op
+        if (r < 0 || r == t || factor <= 1.0e-6f)
+            continue;
 
         for (int i = 0; i < g_numsources; i++) {
             s_source_t *pSource = g_source[i];
@@ -8518,44 +8534,53 @@ void ApplyMoveWeightQueue() {
                 if (slot == -1)
                     continue;
 
-                // assign any lost (under-normalized) weight to the residual bone
-                float sum = 0.0f;
-                for (int n = 0; n < bw.numbones; n++)
-                    sum += bw.weight[n];
+                const float wTarget = bw.weight[slot];
+                if (wTarget <= 1.0e-6f)
+                    continue;
 
-                float shortfall = 1.0f - sum;
-                if (shortfall > 1.0e-4f && r >= 0) {
-                    int rs = -1;
-                    for (int n = 0; n < bw.numbones; n++) {
-                        if (bw.bone[n] == r) {
-                            rs = n;
-                            break;
-                        }
-                    }
-                    if (rs >= 0) {
-                        bw.weight[rs] += shortfall;
-                    } else if (bw.numbones < MAXSTUDIOBONEWEIGHTS) {
-                        bw.bone[bw.numbones] = r;
-                        bw.weight[bw.numbones] = shortfall;
-                        bw.numbones++;
-                    } else {
-                        // 3-bone budget full: evict the smallest non-target slot
-                        int victim = -1;
-                        for (int n = 0; n < bw.numbones; n++) {
-                            if (n == slot)
-                                continue;
-                            if (victim == -1 || bw.weight[n] < bw.weight[victim])
-                                victim = n;
-                        }
-                        if (victim >= 0) {
-                            bw.bone[victim] = r;
-                            bw.weight[victim] += shortfall;
-                        }
+                // weight handed to the residual; the remainder stays on the moved bone
+                const float wMove = wTarget * factor;
+                const float wKeep = wTarget - wMove;
+
+                // is the residual bone already an influence on this vertex?
+                int rs = -1;
+                for (int n = 0; n < bw.numbones; n++) {
+                    if (bw.bone[n] == r) {
+                        rs = n;
+                        break;
                     }
                 }
 
-                // renormalize to guard against FP drift / overflow eviction
-                sum = 0.0f;
+                if (rs >= 0) {
+                    // residual already present: add the transferred share to it
+                    bw.weight[rs] += wMove;
+                    if (wKeep > 1.0e-6f) {
+                        bw.weight[slot] = wKeep;
+                    } else {
+                        // full transfer: drop the now-empty target slot, compacting down
+                        for (int n = slot; n < bw.numbones - 1; n++) {
+                            bw.bone[n] = bw.bone[n + 1];
+                            bw.weight[n] = bw.weight[n + 1];
+                        }
+                        bw.numbones--;
+                    }
+                } else if (wKeep <= 1.0e-6f) {
+                    // full transfer, residual absent: it inherits the target's slot
+                    bw.bone[slot] = r;
+                } else if (bw.numbones < MAXSTUDIOBONEWEIGHTS) {
+                    // partial transfer, residual absent: split the slot, add a new one
+                    bw.weight[slot] = wKeep;
+                    bw.bone[bw.numbones] = r;
+                    bw.weight[bw.numbones] = wMove;
+                    bw.numbones++;
+                } else {
+                    // budget full and residual absent: can't add a slot, so hand the
+                    // whole influence over rather than dropping the transferred weight
+                    bw.bone[slot] = r;
+                }
+
+                // renormalize to guard against FP drift
+                float sum = 0.0f;
                 for (int n = 0; n < bw.numbones; n++)
                     sum += bw.weight[n];
                 if (sum > 1.0e-6f) {

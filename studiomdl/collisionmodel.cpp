@@ -154,6 +154,13 @@ public:
 	// Auto-generation requests parsed from $generate / $generatejoint sub-tokens.
 	// Each names a $rendermesh to convex-decompose into collision.  bone[0]=='\0'
 	// means single-body ($generate); otherwise the hulls attach to that joint.
+	// A child bone whose weighted geometry is welded into a $generatejoint's hull
+	// (from $addgeneratechild).  All child geometry is emitted in the parent joint
+	// bone's local space, so the combined hull still tracks the parent at runtime.
+	struct child_weld_t {
+		char  bone[128];
+		float weightThreshold;  // own cull threshold, or <0 to inherit the request's
+	};
 	struct generate_request_t {
 		char  bone[128];
 		char  rendermesh[128];
@@ -162,8 +169,18 @@ public:
 		int   maxVerts;         // max vertices per generated convex hull (detail/poly count)
 		float weightThreshold;  // ($generatejoint) min bone weight a vertex must have
 		                        // to be included; 0 = include any vertex touching the bone
+		CUtlVector<child_weld_t> children;  // from $addgeneratechild
 	};
 	CUtlVector<generate_request_t> m_generateRequests;
+
+	// $addgeneratechild pairings parsed before their $generatejoint may have been
+	// seen; resolved against m_generateRequests at the top of ProcessGenerateRequests.
+	struct pending_child_t {
+		char  jointBone[128];
+		char  childBone[128];
+		float weightThreshold;  // <0 = inherit the request's
+	};
+	CUtlVector<pending_child_t> m_pendingChildren;
 
 	float m_flFrictionTimeIn;
 	float m_flFrictionTimeOut;
@@ -1165,8 +1182,18 @@ int CJointedModel::ProcessSingleBody()
 // Output positions are produced by posFn(globalVertIndex); re-indexed to a
 // compact vertex list.
 //-----------------------------------------------------------------------------
+// One (bone, threshold) entry in the keep-list passed to ExtractTriangleMesh.  A
+// vertex passes if it meets the threshold for ANY listed bone (parent or child).
+struct bonecull_t {
+	int   localBone;
+	float threshold;  // cullWeight; 0 -> any vertex touching the bone passes
+};
+
+// bKeepAll true ($generate) keeps every face regardless of weighting; otherwise a
+// face is kept only when all three of its verts pass some bone in keepBones.
 template <typename PosFn>
-static void ExtractTriangleMesh( s_source_t *pSrc, int keepBone, float cullWeight,
+static void ExtractTriangleMesh( s_source_t *pSrc, bool bKeepAll,
+                                 const CUtlVector<bonecull_t> &keepBones,
                                  CUtlVector<Vector> &outVerts,
                                  CUtlVector<int> &outTris,
                                  PosFn posFn )
@@ -1182,12 +1209,19 @@ static void ExtractTriangleMesh( s_source_t *pSrc, int keepBone, float cullWeigh
 
 	auto vertPasses = [&]( uint32_t vi ) -> bool
 	{
-		if ( keepBone < 0 ) return true;
+		if ( bKeepAll ) return true;
 		if ( vi >= (uint32_t)pSrc->numvertices ) return false;
 		const s_boneweight_t &bw = pSrc->vertex[vi].boneweight;
-		for ( int k = 0; k < bw.numbones; k++ )
-			if ( bw.bone[k] == keepBone )
-				return bw.weight[k] >= cullWeight;  // cullWeight 0 -> any touch passes
+		for ( int c = 0; c < keepBones.Count(); c++ )
+		{
+			for ( int k = 0; k < bw.numbones; k++ )
+				if ( bw.bone[k] == keepBones[c].localBone )
+				{
+					if ( bw.weight[k] >= keepBones[c].threshold )
+						return true;  // threshold 0 -> any touch passes
+					break;  // found this bone, didn't meet its threshold; try next bone
+				}
+		}
 		return false;
 	};
 
@@ -1289,6 +1323,30 @@ static int AttachDecomposedHulls( CPhysCollisionModel *pPhys,
 //=============================================================================
 void CJointedModel::ProcessGenerateRequests()
 {
+	// Fold $addgeneratechild pairings into their matching $generatejoint request.
+	// Done here (not at parse time) so child lines may precede their joint in the QC.
+	for ( int p = 0; p < m_pendingChildren.Count(); p++ )
+	{
+		const pending_child_t &pc = m_pendingChildren[p];
+		generate_request_t *pReq = NULL;
+		for ( int r = 0; r < m_generateRequests.Count(); r++ )
+			if ( m_generateRequests[r].bone[0] && !stricmp( m_generateRequests[r].bone, pc.jointBone ) )
+			{
+				pReq = &m_generateRequests[r];
+				break;
+			}
+		if ( !pReq )
+		{
+			MdlWarning( "$addgeneratechild: no $generatejoint for bone '%s' (child '%s' ignored).\n",
+				pc.jointBone, pc.childBone );
+			continue;
+		}
+		child_weld_t cw;
+		V_strncpy( cw.bone, pc.childBone, sizeof(cw.bone) );
+		cw.weightThreshold = pc.weightThreshold;
+		pReq->children.AddToTail( cw );
+	}
+
 	for ( int r = 0; r < m_generateRequests.Count(); r++ )
 	{
 		const generate_request_t &req = m_generateRequests[r];
@@ -1327,12 +1385,52 @@ void CJointedModel::ProcessGenerateRequests()
 			matrix3x4_t boneFromPose;
 			MatrixInvert( poseFromBone, boneFromPose );
 
-			ExtractTriangleMesh( pSrc, localBone, req.weightThreshold, verts, tris,
+			// Keep-list: the joint bone plus any $addgeneratechild bones.  All of
+			// their geometry is emitted in the parent bone's local space below, so
+			// the welded hull tracks the parent joint at runtime.
+			CUtlVector<bonecull_t> keepBones;
+			{
+				bonecull_t bc; bc.localBone = localBone; bc.threshold = req.weightThreshold;
+				keepBones.AddToTail( bc );
+			}
+			for ( int c = 0; c < req.children.Count(); c++ )
+			{
+				int childLocal = ::FindLocalBoneNamed( pSrc, req.children[c].bone );
+				if ( childLocal < 0 )
+				{
+					MdlWarning( "$addgeneratechild: child bone '%s' not found in $rendermesh '%s' (skipped).\n",
+						req.children[c].bone, req.rendermesh );
+					continue;
+				}
+				bonecull_t bc;
+				bc.localBone = childLocal;
+				bc.threshold = ( req.children[c].weightThreshold < 0.0f )
+					? req.weightThreshold : req.children[c].weightThreshold;
+				keepBones.AddToTail( bc );
+			}
+
+			ExtractTriangleMesh( pSrc, false, keepBones, verts, tris,
 				[&]( uint32_t vi ) -> Vector {
 					Vector out;
 					VectorTransform( pSrc->vertex[vi].position, boneFromPose, out );
 					return out;
 				} );
+
+			// Compensate $movebone/$rotatebone bind-pose edits on the joint bone, as
+			// ProcessJointedModel does; no-op for unedited bones.  Child welds ride the
+			// parent's frame, so this parent-keyed correction covers the whole hull.
+			matrix3x4_t boneEditDelta;
+			if ( GetAccumulatedBoneEditDelta( globalBone, boneEditDelta ) )
+			{
+				matrix3x4_t boneEditDeltaInv;
+				MatrixInvert( boneEditDelta, boneEditDeltaInv );
+				for ( int vi = 0; vi < verts.Count(); vi++ )
+				{
+					Vector corrected;
+					VectorTransform( verts[vi], boneEditDeltaInv, corrected );
+					verts[vi] = corrected;
+				}
+			}
 
 			if ( verts.Count() < 4 || tris.Count() < 3 )
 			{
@@ -1396,13 +1494,20 @@ void CJointedModel::ProcessGenerateRequests()
 				AppendCollisionModel( pPhys );
 
 			if ( !g_StudioMdlContext.quiet )
-				printf( "$generatejoint %-20s (%d convex elements from '%s')\n",
-					pBoneName, nAttached, req.rendermesh );
+			{
+				if ( req.children.Count() )
+					printf( "$generatejoint %-20s (%d convex elements from '%s', +%d child bone(s))\n",
+						pBoneName, nAttached, req.rendermesh, req.children.Count() );
+				else
+					printf( "$generatejoint %-20s (%d convex elements from '%s')\n",
+						pBoneName, nAttached, req.rendermesh );
+			}
 		}
 		else
 		{
 			// Single body: all faces in model/world space, one rigid solid.
-			ExtractTriangleMesh( pSrc, -1, 0.0f, verts, tris,
+			CUtlVector<bonecull_t> keepAll;  // unused when bKeepAll is true
+			ExtractTriangleMesh( pSrc, true, keepAll, verts, tris,
 				[&]( uint32_t vi ) -> Vector {
 					Vector raw = pSrc->vertex[vi].position;
 					Vector shifted; VectorSubtract( raw, pSrc->adjust, shifted );
@@ -1769,16 +1874,49 @@ static void ParseCollisionCommands( CJointedModel &joints )
 		else if ( !stricmp( command, "$generate" ) )
 		{
 			// $generate <rendermesh> [concavity <f>] [hull <i>]
-			CJointedModel::generate_request_t req;
-			if ( ParseGenerateRequest( req, false ) )
-				joints.m_generateRequests.AddToTail( req );
+			// Build in place: generate_request_t holds a CUtlVector and is not copyable.
+			int idx = joints.m_generateRequests.AddToTail();
+			if ( !ParseGenerateRequest( joints.m_generateRequests[idx], false ) )
+				joints.m_generateRequests.Remove( idx );
 		}
 		else if ( !stricmp( command, "$generatejoint" ) )
 		{
 			// $generatejoint <bone> <rendermesh> [concavity <f>] [hull <i>] [cullweight <f>]
-			CJointedModel::generate_request_t req;
-			if ( ParseGenerateRequest( req, true ) )
-				joints.m_generateRequests.AddToTail( req );
+			int idx = joints.m_generateRequests.AddToTail();
+			if ( !ParseGenerateRequest( joints.m_generateRequests[idx], true ) )
+				joints.m_generateRequests.Remove( idx );
+		}
+		else if ( !stricmp( command, "$addgeneratechild" ) )
+		{
+			// $addgeneratechild <generatejoint bone> <child bone> [cullweight <f>]
+			// Welds the child bone's weighted geometry into the named joint's hull.
+			CJointedModel::pending_child_t pc;
+			pc.weightThreshold = -1.0f;  // inherit the joint's by default
+			if ( !GetToken( false ) )
+			{
+				MdlWarning( "$addgeneratechild: expected <generatejoint bone>\n" );
+			}
+			else
+			{
+				V_strncpy( pc.jointBone, token, sizeof(pc.jointBone) );
+				if ( !GetToken( false ) )
+				{
+					MdlWarning( "$addgeneratechild: expected <child bone>\n" );
+				}
+				else
+				{
+					V_strncpy( pc.childBone, token, sizeof(pc.childBone) );
+					while ( TokenAvailable() && GetToken( false ) )
+					{
+						if ( !stricmp( token, "cullweight" ) || !stricmp( token, "cull" ) )
+						{
+							if ( GetToken( false ) ) pc.weightThreshold = (float)atof( token );
+						}
+						else { UnGetToken(); break; }
+					}
+					joints.m_pendingChildren.AddToTail( pc );
+				}
+			}
 		}
 		else
 		{
