@@ -3486,33 +3486,30 @@ void CollapseBones() {
 //          collapses the skeleton.
 //-----------------------------------------------------------------------------
 static void ApplyStaticPropPose() {
-    s_source_t *pPoseSource = g_pStaticPropPoseSource;
+    s_source_t* pPoseSource = g_pStaticPropPoseSource;
 
     if (!pPoseSource || pPoseSource->m_Animations.Count() == 0) {
         MdlWarning("$staticproppose: pose source has no animations, ignoring\n");
         return;
     }
 
-    s_sourceanim_t *pPoseAnim = &pPoseSource->m_Animations[0];
+    s_sourceanim_t* pPoseAnim = &pPoseSource->m_Animations[0];
     int frame = clamp(g_nStaticPropPoseFrame, 0, pPoseAnim->numframes - 1);
 
     if (g_nStaticPropPoseFrame != frame) {
         MdlWarning("$staticproppose: frame %d out of range [0, %d], clamped\n",
-                   g_nStaticPropPoseFrame, pPoseAnim->numframes - 1);
+            g_nStaticPropPoseFrame, pPoseAnim->numframes - 1);
     }
 
-    // Build target pose in scaled bone space so it matches vertex positions (scaled by g_currentscale).
     matrix3x4_t targetBoneToWorld[MAXSTUDIOSRCBONES];
     BuildRawTransforms(pPoseSource, pPoseAnim->animationname, frame,
-                       g_currentscale, Vector(0, 0, 0), RadianEuler(0, 0, 0), 0, targetBoneToWorld);
+        1.0f, Vector(0, 0, 0), RadianEuler(0, 0, 0), 0, targetBoneToWorld);
 
     for (int i = 0; i < g_numsources; i++) {
-        s_source_t *psource = g_source[i];
+        s_source_t* psource = g_source[i];
         if (psource->numvertices == 0)
             continue;
 
-        // skinMat[k] = targetBoneToWorld[matchedPoseBone] * inverse(scaledBoneToPose[k])
-        // boneToPose stores unscaled translations; scale them to match vertex space.
         matrix3x4_t skinMat[MAXSTUDIOSRCBONES];
         for (int k = 0; k < psource->numbones; k++) {
             int poseIdx = -1;
@@ -3525,30 +3522,23 @@ static void ApplyStaticPropPose() {
 
             if (poseIdx == -1) {
                 MdlWarning("$staticproppose: bone '%s' not in pose source, using bind pose\n",
-                           psource->localBone[k].name);
+                    psource->localBone[k].name);
                 SetIdentityMatrix(skinMat[k]);
                 continue;
             }
 
-            // Scale boneToPose translations to match vertex-space scale.
-            matrix3x4_t scaledBind;
-            MatrixCopy(psource->boneToPose[k], scaledBind);
-            scaledBind[0][3] *= g_currentscale;
-            scaledBind[1][3] *= g_currentscale;
-            scaledBind[2][3] *= g_currentscale;
-
             matrix3x4_t invBind;
-            MatrixInvert(scaledBind, invBind);
+            MatrixInvert(psource->boneToPose[k], invBind);
             ConcatTransforms(targetBoneToWorld[poseIdx], invBind, skinMat[k]);
         }
 
         for (int j = 0; j < psource->numvertices; j++) {
-            const s_boneweight_t &bw = psource->vertex[j].boneweight;
+            const s_boneweight_t& bw = psource->vertex[j].boneweight;
             Vector newPos(0, 0, 0), newNormal(0, 0, 0), newTangentS(0, 0, 0);
 
             for (int k = 0; k < bw.numbones; k++) {
                 float w = bw.weight[k];
-                const matrix3x4_t &m = skinMat[bw.bone[k]];
+                const matrix3x4_t& m = skinMat[bw.bone[k]];
                 Vector tmp;
 
                 VectorTransform(psource->vertex[j].position, m, tmp);
@@ -3570,26 +3560,30 @@ static void ApplyStaticPropPose() {
             VectorCopy(newTangentS, psource->vertex[j].tangentS.AsVector3D());
             psource->vertex[j].tangentS.w = tangentHandedness;
         }
-    }
 
-    // Bake flex overrides into vertex positions before the skeleton is collapsed.
-    for (int ov = 0; ov < g_staticPropPoseFlexOverrides.Count(); ov++) {
-        const char *pFlexName = g_staticPropPoseFlexOverrides[ov].name;
-        float value = clamp(g_staticPropPoseFlexOverrides[ov].value, 0.0f, 1.0f);
+        // Bake flex overrides now that skinMat is available
+        for (int ov = 0; ov < g_staticPropPoseFlexOverrides.Count(); ov++) {
+            const char* pFlexName = g_staticPropPoseFlexOverrides[ov].name;
+            float value = clamp(g_staticPropPoseFlexOverrides[ov].value, 0.0f, 1.0f);
 
-        bool found = false;
-        for (int i = 0; i < g_numsources; i++) {
-            s_source_t *psource = g_source[i];
-            s_sourceanim_t *pFlexAnim = FindSourceAnim(psource, pFlexName);
+            s_sourceanim_t* pFlexAnim = FindSourceAnim(psource, pFlexName);
             if (!pFlexAnim || pFlexAnim->numvanims[0] == 0 || !pFlexAnim->vanim[0])
                 continue;
 
-            found = true;
             for (int k = 0; k < pFlexAnim->numvanims[0]; k++) {
-                const s_vertanim_t &va = pFlexAnim->vanim[0][k];
+                const s_vertanim_t& va = pFlexAnim->vanim[0][k];
                 if (va.vertex < 0 || va.vertex >= psource->numvertices)
                     continue;
-                VectorMA(psource->vertex[va.vertex].position, value, va.pos, psource->vertex[va.vertex].position);
+
+                const s_boneweight_t& bw = psource->vertex[va.vertex].boneweight;
+                Vector worldDelta(0, 0, 0);
+                for (int b = 0; b < bw.numbones; b++) {
+                    Vector tmp;
+                    VectorRotate(va.pos, skinMat[bw.bone[b]], tmp);
+                    VectorMA(worldDelta, bw.weight[b], tmp, worldDelta);
+                }
+                VectorMA(psource->vertex[va.vertex].position, value, worldDelta, psource->vertex[va.vertex].position);
+
                 Vector newNormal;
                 VectorMA(psource->vertex[va.vertex].normal, value, va.normal, newNormal);
                 if (newNormal.LengthSqr() > 0.0f) {
@@ -3597,10 +3591,6 @@ static void ApplyStaticPropPose() {
                     psource->vertex[va.vertex].normal = newNormal;
                 }
             }
-        }
-
-        if (!found) {
-            MdlWarning("$staticproppose flex '%s': no source animation found, skipping\n", pFlexName);
         }
     }
 }
