@@ -27,9 +27,9 @@ extern StudioMdlContext g_StudioMdlContext;
 // $rendermesh: named filtered views of DMX files
 //-----------------------------------------------------------------------------
 
-#define MAX_RENDERMESH_DEFS             256
-#define MAX_RENDERMESH_OVERRIDES        128
-#define MAX_RENDERMESH_MATERIAL_REMOVES  64
+#define MAX_RENDERMESH_DEFS             512
+#define MAX_RENDERMESH_OVERRIDES        256
+#define MAX_RENDERMESH_MATERIAL_REMOVES 256
 
 struct s_rendermesh_override_t {
     char meshName[MAXSTUDIONAME];
@@ -5230,27 +5230,61 @@ void Cmd_AppendSource() {
     AddSrcToSrc(pOrigSource, pAppendSource, matTemp);
 }
 
-void Cmd_maxBones() {
+// $modelbudget { ... } -- sets user-facing *soft* resource limits. Each value is
+// clamped to [1, hard cap], where the hard cap is the matching compile-time #define.
+// Replaces the legacy $maxverts / $maxbones commands.
+static int ReadBudgetValue(int hardCap) {
     GetToken(false);
-    int limit = atoi(token);
-    if (limit < 1 || limit > MAXSTUDIOBONES) {
-        MdlError("$maxbones: value %d out of range [1, %d]\n", limit, MAXSTUDIOBONES);
-        return;
-    }
-    g_StudioMdlContext.maxBoneLimit = limit;
+    return clamp(atoi(token), 1, hardCap);
 }
 
-void Cmd_maxVerts() {
-    // first limit
-    GetToken(false);
-    g_StudioMdlContext.maxVertexLimit = clamp(atoi(token), 1024, MAXSTUDIOVERTS);
-    g_StudioMdlContext.maxVertexClamp = MIN(g_StudioMdlContext.maxVertexLimit, MAXSTUDIOVERTS / 2);
+void Cmd_ModelBudget() {
+    int is_started = 0;
 
-    if (TokenAvailable()) {
-        // actual target limit
-        GetToken(false);
-        g_StudioMdlContext.maxVertexClamp = clamp(atoi(token), 1024, MAXSTUDIOVERTS);
-    }
+    do {
+        GetToken(true);
+        if (endofscript)
+            return;
+        else if (token[0] == '{') {
+            is_started = 1;
+        } else if (token[0] == '}') {
+            break;
+        } else if (stricmp("totalverts", token) == 0) {
+            g_StudioMdlContext.budgetTotalVerts = ReadBudgetValue(MAXSTUDIOVERTS);
+        } else if (stricmp("bodyverts", token) == 0) {
+            // first value: split limit; clamped to [1, MAXSTUDIOVERTS/2]
+            g_StudioMdlContext.maxVertexLimit = ReadBudgetValue(MAXSTUDIOVERTS / 2);
+            g_StudioMdlContext.maxVertexClamp = MIN(g_StudioMdlContext.maxVertexLimit, MAXSTUDIOVERTS / 2);
+            if (TokenAvailable()) {
+                // optional second value: explicit clamp
+                g_StudioMdlContext.maxVertexClamp = ReadBudgetValue(MAXSTUDIOVERTS / 2);
+            }
+        } else if (stricmp("bones", token) == 0) {
+            g_StudioMdlContext.maxBoneLimit = ReadBudgetValue(MAXSTUDIOBONES);
+        } else if (stricmp("materials", token) == 0) {
+            g_StudioMdlContext.budgetMaterials = ReadBudgetValue(MAXSTUDIOSKINS);
+        } else if (stricmp("flexcontroller", token) == 0) {
+            g_StudioMdlContext.budgetFlexControllers = ReadBudgetValue(MAXSTUDIOFLEXCTRL);
+        } else if (stricmp("flexmorph", token) == 0) {
+            g_StudioMdlContext.budgetFlexMorph = ReadBudgetValue(MAXSTUDIOFLEXDESC);
+        } else if (stricmp("flexmorphverts", token) == 0) {
+            g_StudioMdlContext.budgetFlexMorphVerts = ReadBudgetValue(MAXSTUDIOFLEXVERTS);
+        } else if (stricmp("flexrules", token) == 0) {
+            g_StudioMdlContext.budgetFlexRules = ReadBudgetValue(MAXSTUDIOFLEXRULES);
+        } else if (stricmp("poseparam", token) == 0) {
+            g_StudioMdlContext.budgetPoseParam = ReadBudgetValue(MAXSTUDIOPOSEPARAM);
+        } else if (stricmp("boneconstraints", token) == 0) {
+            g_StudioMdlContext.budgetBoneConstraints = ReadBudgetValue(MAXSTUDIOBONECONSTRAINTS);
+        } else if (stricmp("sequence", token) == 0) {
+            g_StudioMdlContext.budgetSequences = ReadBudgetValue(MAXSTUDIOSEQUENCES);
+        } else if (stricmp("animation", token) == 0) {
+            g_StudioMdlContext.budgetAnimations = ReadBudgetValue(MAXSTUDIOANIMS);
+        } else {
+            MdlError("unknown $modelbudget parameter: \"%s\"\n", token);
+        }
+    } while (1);
+
+    (void) is_started;
 }
 
 s_sequence_t *LookupSequence(const char *name) {
@@ -9034,8 +9068,7 @@ MDLCommand_t g_Commands[] =
                 {"$addsearchdir",                    Cmd_AddSearchDir,},
                 {"$subd",                            Cmd_SubdivisionSurface,},
                 {"$boneflexdriver",                  Cmd_BoneFlexDriver,},
-                {"$maxverts",                        Cmd_maxVerts,},
-                {"$maxbones",                        Cmd_maxBones,},
+                {"$modelbudget",                     Cmd_ModelBudget,},
                 {"$preservetriangleorder",           Cmd_PreserveTriangleOrder,},
                 {"$qcassert",                        Cmd_QCAssert,},
                 {"$lcaseallsequences",               Cmd_LCaseAllSequences,},

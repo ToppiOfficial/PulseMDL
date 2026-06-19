@@ -57,14 +57,42 @@ class CDmeCombinationOperator;
 #define MAXSTUDIOANIMFRAMES        5000    // max frames per animation
 // [mlowrance] updated total number of animations to give more headroom for new weapons
 // bumped up from 2k to 3k
-#define MAXSTUDIOANIMS            3000    // total animations
-#define MAXSTUDIOSEQUENCES        1524    // total sequences
+#define MAXSTUDIOANIMS            8192    // total animations
+#define MAXSTUDIOSEQUENCES        4096    // total sequences
 #define MAXSTUDIOSRCBONES        1024        // bones allowed at source movement
 #define MAXSTUDIOTEXCOORDS        8
 #define MAXSTUDIOMESHES            256
 #define MAXSTUDIOEVENTS            1024
-#define MAXSTUDIOFLEXKEYS        512
-#define MAXSTUDIOFLEXRULES        1024
+#define MAXSTUDIOFLEXKEYS        (MAXSTUDIOFLEXDESC / 2)    // always half of MAXSTUDIOFLEXDESC
+#define MAXSTUDIOFLEXRULES        4096
+
+// Hard cap on the number of bone constraints (point / orient / aim / parent,
+// i.e. g_constraintBones) used as the $modelbudget "boneconstraints" ceiling.
+// Jigglebones, twist bones and aimat bones are separate procedural-bone types
+// and are not counted. This is only a runtime soft-check ceiling -- it does NOT
+// size any array.
+#define MAXSTUDIOBONECONSTRAINTS  256
+
+//-----------------------------------------------------------------------------
+// $modelbudget HARD CAPS (the compile-time ceilings each budget param clamps to)
+// These mirror the #defines above/in studio.h. Edit the #define to change a cap;
+// $modelbudget only sets the lower runtime *soft* limit (never above the cap).
+//
+//   budget param      hard cap #define          default soft value
+//   ------------      ----------------          ------------------
+//   totalverts        MAXSTUDIOVERTS            MAXSTUDIOVERTS
+//   bodyverts         MAXSTUDIOVERTS / 2        MAXSTUDIOVERTS / 3
+//   bones             MAXSTUDIOBONES (1024)     256
+//   materials         MAXSTUDIOSKINS (128)      32
+//   flexcontroller    MAXSTUDIOFLEXCTRL (256)   96
+//   flexmorph         MAXSTUDIOFLEXDESC (4096)  1024   (also bounds flexkeys = /2)
+//   flexmorphverts    MAXSTUDIOFLEXVERTS(65536) 32768
+//   flexrules         MAXSTUDIOFLEXRULES (4096) 1024
+//   poseparam         MAXSTUDIOPOSEPARAM (64)   24
+//   boneconstraints   MAXSTUDIOBONECONSTRAINTS  64
+//   sequence          MAXSTUDIOSEQUENCES (4096) 1524
+//   animation         MAXSTUDIOANIMS (8192)     3000
+//-----------------------------------------------------------------------------
 #define MAXSTUDIOBONEWEIGHTS    3
 #define MAXSTUDIOCMDS            64
 #define MAXSTUDIOMOVEKEYS        64
@@ -2008,9 +2036,22 @@ struct StudioMdlContext {
     char *szInCurrentSeqName;
     std::vector<CUtlString> AllowedActivityNames;
 
-    int maxVertexLimit = MAXSTUDIOVERTS / 3;
-    int maxVertexClamp = MAXSTUDIOVERTS / 3;
-    int maxBoneLimit = 256;   // default enforced limit; raise up to MAXSTUDIOBONES (1024) via $maxbones
+    // $modelbudget soft limits (hard caps = the #defines noted in []).
+    // maxVertexLimit/maxVertexClamp/maxBoneLimit keep their legacy names because
+    // existing code (ClampMaxVerticesPerModel, simplify.cpp bone check) reads them.
+    int budgetTotalVerts      = MAXSTUDIOVERTS;          // [MAXSTUDIOVERTS]
+    int maxVertexLimit        = MAXSTUDIOVERTS / 3;      // bodyverts limit  [MAXSTUDIOVERTS/2]
+    int maxVertexClamp        = MAXSTUDIOVERTS / 3;      // bodyverts clamp  [MAXSTUDIOVERTS/2]
+    int maxBoneLimit          = 256;                     // [MAXSTUDIOBONES = 1024]
+    int budgetMaterials       = 32;                      // [MAXSTUDIOSKINS = 128]
+    int budgetFlexControllers = 96;                      // [MAXSTUDIOFLEXCTRL = 256]
+    int budgetFlexMorph       = 1024;                    // [MAXSTUDIOFLEXDESC = 4096] (also bounds flexkeys = /2)
+    int budgetFlexMorphVerts  = 32768;                   // [MAXSTUDIOFLEXVERTS = 65536]
+    int budgetFlexRules       = 1024;                    // [MAXSTUDIOFLEXRULES = 4096]
+    int budgetPoseParam       = 24;                      // [MAXSTUDIOPOSEPARAM = 64]
+    int budgetBoneConstraints = 64;                      // [MAXSTUDIOBONECONSTRAINTS = 256]
+    int budgetSequences       = 1524;                    // [MAXSTUDIOSEQUENCES = 4096]
+    int budgetAnimations      = 3000;                    // [MAXSTUDIOANIMS = 8192]
 
     int numverts = 0;
     CUtlVectorAuto<Vector> vertex;

@@ -2620,7 +2620,10 @@ void RemapVertexAnimations() {
         ComputeVertexAnimationSpeed(g_flexkey[i]);
     }
 
-    if (numMoved > MAXSTUDIOFLEXVERTS) {
+    if (numMoved > g_StudioMdlContext.budgetFlexMorphVerts) {
+        MdlError("$modelbudget flexmorphverts exceeded: %d flexed verts, budget %d\n",
+                 numMoved, g_StudioMdlContext.budgetFlexMorphVerts);
+    } else if (numMoved > MAXSTUDIOFLEXVERTS) {
         MdlError("Too many flexed verts %d (%d)\n", numMoved, MAXSTUDIOFLEXVERTS);
     } else if (numMoved > 0 && !g_StudioMdlContext.quiet) {
         printf("Max flex verts %d\n", numMoved);
@@ -2786,7 +2789,10 @@ static void RemapVertexAnimationsNewVersion() {
         }
     }
 
-    if (nNumMoved > MAXSTUDIOFLEXVERTS) {
+    if (nNumMoved > g_StudioMdlContext.budgetFlexMorphVerts) {
+        MdlError("$modelbudget flexmorphverts exceeded: %d flexed verts, budget %d\n",
+                 nNumMoved, g_StudioMdlContext.budgetFlexMorphVerts);
+    } else if (nNumMoved > MAXSTUDIOFLEXVERTS) {
         MdlError("Too many flexed verts %d (%d)\n", nNumMoved, MAXSTUDIOFLEXVERTS);
     } else if (nNumMoved > 0 && !g_StudioMdlContext.quiet) {
         printf("Max flex verts %d\n", nNumMoved);
@@ -8786,6 +8792,50 @@ void ApplyMoveWeightQueue() {
     g_moveWeightQueue.RemoveAll();
 }
 
+//-----------------------------------------------------------------------------
+// $modelbudget: enforce the user-facing *soft* resource limits once all counts
+// are final. Hard caps (the #defines) are still enforced separately at each add
+// site; this only fails earlier when the user-declared budget is exceeded.
+//-----------------------------------------------------------------------------
+static void ValidateModelBudget() {
+    // total render vertices across all LOD0 model pools (matches the count
+    // written to the .vvd in WriteVertices)
+    int totalVerts = 0;
+    for (int i = 0; i < g_nummodelsbeforeLOD; i++) {
+        s_loddata_t *pLodData = g_model[i] ? g_model[i]->m_pLodData : NULL;
+        if (pLodData)
+            totalVerts += pLodData->numvertices;
+    }
+
+    // true bone constraints (point / orient / aim / parent). Jigglebones,
+    // twistbones and $driverlookat aimat bones are separate procedural-bone
+    // types, not constraints, so they are intentionally excluded.
+    int boneConstraints = g_constraintBones.Count();
+
+    struct {
+        int count;
+        int budget;
+        const char *param;
+    } checks[] = {
+        {totalVerts,            g_StudioMdlContext.budgetTotalVerts,      "totalverts"},
+        {g_numtextures,         g_StudioMdlContext.budgetMaterials,       "materials"},
+        {g_numflexcontrollers,  g_StudioMdlContext.budgetFlexControllers, "flexcontroller"},
+        {g_numflexdesc,         g_StudioMdlContext.budgetFlexMorph,       "flexmorph"},
+        {g_numflexrules,        g_StudioMdlContext.budgetFlexRules,       "flexrules"},
+        {g_numposeparameters,   g_StudioMdlContext.budgetPoseParam,       "poseparam"},
+        {boneConstraints,       g_StudioMdlContext.budgetBoneConstraints, "boneconstraints"},
+        {g_sequence.Count(),    g_StudioMdlContext.budgetSequences,       "sequence"},
+        {g_numani,              g_StudioMdlContext.budgetAnimations,      "animation"},
+    };
+
+    for (int i = 0; i < (int) (sizeof(checks) / sizeof(checks[0])); i++) {
+        if (checks[i].count > checks[i].budget) {
+            MdlError("$modelbudget %s exceeded: model uses %d, budget %d\n",
+                     checks[i].param, checks[i].count, checks[i].budget);
+        }
+    }
+}
+
 void SimplifyModel() {
     if (g_nosequence) {
         if (g_StudioMdlContext.modelIntentionallyHasZeroSequences)
@@ -8924,6 +8974,9 @@ void SimplifyModel() {
     if (g_StudioMdlContext.buildPreview) {
         gflags |= STUDIOHDR_FLAGS_BUILT_IN_PREVIEW_MODE;
     }
+
+    // enforce $modelbudget soft limits now that all counts are final
+    ValidateModelBudget();
 }
 
 

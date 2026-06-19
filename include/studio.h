@@ -69,13 +69,13 @@ struct studiohdr_t;
 #else
 #define MAXSTUDIOTRIANGLES	524288
 #define MAXSTUDIOVERTS		524288
-#define	MAXSTUDIOFLEXVERTS	32768  	// max number of verts that can be flexed per mesh.  TODO: tune this
+#define	MAXSTUDIOFLEXVERTS	65536  	// max number of verts that can be flexed per mesh.  TODO: tune this
 #endif
-#define MAXSTUDIOSKINS		96		// total textures
+#define MAXSTUDIOSKINS		128		// total textures
 #define MAXSTUDIOBONES		1024	// total bones actually used
-#define MAXSTUDIOFLEXDESC	1024	// maximum number of low level flexes (actual morph targets)
-#define MAXSTUDIOFLEXCTRL	96		// maximum number of flexcontrollers (input sliders)
-#define MAXSTUDIOPOSEPARAM	24
+#define MAXSTUDIOFLEXDESC	4096	// maximum number of low level flexes (actual morph targets)
+#define MAXSTUDIOFLEXCTRL	256		// maximum number of flexcontrollers (input sliders)
+#define MAXSTUDIOPOSEPARAM	64
 #define MAXSTUDIOBONECTRLS	4
 #define MAXSTUDIOANIMBLOCKS 256
 
