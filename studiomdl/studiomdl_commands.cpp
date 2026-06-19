@@ -83,8 +83,21 @@ static void ParseContents(int *pAddFlags, int *pRemoveFlags) {
             *pAddFlags |= CONTENTS_SOLID;
         } else if (!stricmp(token, "monster")) {
             *pAddFlags |= CONTENTS_MONSTER;
+        } else if (!stricmp(token, "debris")) {
+            *pAddFlags |= CONTENTS_DEBRIS;
         } else if (!stricmp(token, "notsolid")) {
             *pRemoveFlags |= CONTENTS_SOLID;
+        } else {
+            // Numeric input: arbitrary combinations of Contents flags may be set
+            // via a raw integer (decimal or 0x-prefixed hex). See:
+            // https://developer.valvesoftware.com/wiki/BSP_flags_(Source)#Contents_flags
+            char *pEnd = nullptr;
+            long nValue = strtol(token, &pEnd, 0);
+            if (pEnd != token && *pEnd == '\0') {
+                *pAddFlags |= (int)nValue;
+            } else {
+                MdlError("Unknown $contents value \"%s\"\n", token);
+            }
         }
     } while (TokenAvailable());
 }
@@ -4606,6 +4619,14 @@ void Cmd_JiggleBone() {
 
 void Cmd_IncludeModel() {
     GetToken(false);
+
+    // Must reference a compiled .mdl; anything else (e.g. a source .dmx/.smd or a
+    // bare name) cannot be included and would silently produce a broken reference.
+    const int nLen = Q_strlen(token);
+    if (nLen < 4 || Q_stricmp(token + nLen - 4, ".mdl") != 0) {
+        MdlError("$includemodel: \"%s\" must end in .mdl\n", token);
+    }
+
     strcpyn(g_includemodel[g_numincludemodels].name, "models/");
     strcat(g_includemodel[g_numincludemodels].name, token);
     g_numincludemodels++;

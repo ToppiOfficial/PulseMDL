@@ -4201,14 +4201,14 @@ bool FixupToSortedLODVertexes(studiohdr_t *pStudioHdr,
     int i;
     bool bLoadedLodBuf;
 
-    const char *vtxPrefixes[] = {".dx90.vtx", ".dx80.vtx", ".sw.vtx"};
+    const char *vtxPrefixes[] = {".dx90.vtx", ".dx80.vtx"};
     const bool bWriteDX8 = g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild && !g_StudioMdlContext.noDX80;
     const int numPrefixes = bWriteDX8 ? ARRAYSIZE(vtxPrefixes) : 1;
     const int idxPrefixLodUsage = bWriteDX8 ? 1 : 0;
 
     // in-memory preloaded buffers indexed to match vtxPrefixes[]
-    void *preloadedBufs[3]  = { pDx90Buf, pDx80Buf, pSwBuf };
-    int   preloadedLens[3]  = { dx90Len,  dx80Len,  swLen  };
+    void *preloadedBufs[2]  = { pDx90Buf, pDx80Buf };
+    int   preloadedLens[2]  = { dx90Len,  dx80Len  };
 
     strcpy(filename, gamedir);
 //	if( *g_pPlatformName )
@@ -4602,7 +4602,7 @@ bool Clamp_RootLOD(studiohdr_t *phdr) {
     char tmpFileName[260];
     int i;
 
-    const char *vtxPrefixes[] = {".dx90.vtx", ".dx80.vtx", ".sw.vtx"};
+    const char *vtxPrefixes[] = {".dx90.vtx", ".dx80.vtx"};
     const int numPrefixes = (g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild && !g_StudioMdlContext.noDX80) ? ARRAYSIZE(vtxPrefixes) : 1;
     bool bExtraData = (phdr->flags & STUDIOHDR_FLAGS_EXTRA_VERTEX_DATA) != 0;
 

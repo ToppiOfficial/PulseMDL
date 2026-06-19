@@ -3918,23 +3918,10 @@ namespace OptimizedModel {
         strcat(filename, g_outname);
         Q_StripExtension(filename, filename, sizeof(filename));
 
-        if (g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild && !g_StudioMdlContext.noDX80) {
-            strcpy(tmpFileName, filename);
-            strcat(tmpFileName, ".sw.vtx");
-            strcpy(glViewFilename, filename);
-            strcat(glViewFilename, ".sw.glview");
-            bool bForceSoftwareSkinning = phdr->numbones > 0 && !g_staticprop;
-            s_OptimizedModel.OptimizeFromStudioHdr(phdr, pSrcBodyParts,
-                                                   512,    //vert cache size FIXME: figure out the correct size for L1
-                                                   false, /* doesn't use fixed function */
-                                                   bForceSoftwareSkinning,    // force software skinning if not static prop
-                                                   false, // No hardware flex
-                                                   3,        // bones/vert
-                                                   3 * 3,        // bones/tri
-                                                   512,    // bones/strip
-                                                   tmpFileName, glViewFilename,
-                                                   ppSwBuf, pSwLen);
-        }
+        // The software-skinned (.sw.vtx) file is no longer emitted. Leave the out-params
+        // at their caller-initialized nullptr/0 so the downstream fixup never touches it.
+        *ppSwBuf = nullptr;
+        *pSwLen = 0;
 
         if (g_gameinfo.bSupportsDX8 && !g_StudioMdlContext.fastBuild && !g_StudioMdlContext.noDX80) {
             strcpy(tmpFileName, filename);
