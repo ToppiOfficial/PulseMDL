@@ -311,18 +311,24 @@ struct s_importbone_t {
 EXTERN std::array<s_importbone_t, MAXSTUDIOSRCBONES> g_importbone;
 
 
-// $rotatebone / $movebone - late bind-pose edits. Capped to a small combined budget.
-#define MAX_BONE_TRANSFORM_EDITS 16
-enum BoneXformKind { BONEXFORM_ROTATE, BONEXFORM_MOVE };
+// $transformbindposebone - late bind-pose edits (merged $rotatebone/$movebone).
+// Capped to a combined budget.
+#define MAX_BONE_TRANSFORM_EDITS 64
+enum BoneXformKind { BONEXFORM_ROTATE, BONEXFORM_MOVE };  // per-sub-edit category (angles vs position)
 enum BoneXformSpace { BONEXFORM_LOCAL, BONEXFORM_WORLD };
 struct s_bonetransformedit_t {
     char name[MAXSTUDIONAME];
-    BoneXformKind kind;
-    BoneXformSpace space;
-    float v[3];                      // rotate: euler degrees ; move: units
-    bool hasMoveWeight;
+    bool hasAngles;                  // 'angles <rx ry rz>' present
+    BoneXformSpace angleSpace;       // local (default) or world (worldangles)
+    float angles[3];                 // euler degrees
+    bool hasPosition;                // 'position <x y z>' present
+    BoneXformSpace posSpace;         // local (default) or world (worldposition)
+    float pos[3];                    // units
+    bool hasMoveWeight;              // 'transformweights <residualbone> [factor]' present
     char residualbone[MAXSTUDIONAME];
     float moveWeightFactor;          // [0,1] fraction of moved-bone weight handed to residual
+    bool transformVerts;            // rigidly carry the bone's rigged verts at rest (excludes transformweights)
+    bool ignoreAnimation;           // edit does not flow into any $sequence/$animation frame
     bool ignoreHitbox;               // keep this bone's manual hitboxes in place
     int linecount;
 };
@@ -416,47 +422,39 @@ struct s_attachment_t {
 EXTERN std::array<s_attachment_t, MAXSTUDIOSRCBONES> g_attachment;
 EXTERN int g_numattachments;
 
-// $aligneyes: deferred request that auto-generates an attachment from named eyeballs.
-// Origin = centroid of their material vertices; forward = literal world-space
-// 'forward', or the averaged eyeball normals when 'forward' is 0,0,0. Computed in
-// world space and stored absolute. Resolved by GenerateAlignEyesAttachments
-// (simplify.cpp).
-#define MAX_ALIGNEYES 8
-#define MAX_ALIGNEYES_EYEBALLS 8
-struct s_aligneyes_t {
-    char name[MAXSTUDIONAME];                                 // attachment name
-    char eyeballs[MAX_ALIGNEYES_EYEBALLS][MAXSTUDIONAME];     // eyeball names to align
-    int  numeyeballs;
-    Vector offset;     // world-aligned, added to the eye centroid (units); default 0,0,0
-    Vector forward;    // literal world-space forward; 0,0,0 = use averaged normals
-    int attachIndex;   // slot reserved in g_attachment[] at parse time (preserves order)
-    int linecount;
-};
-EXTERN std::array<s_aligneyes_t, MAX_ALIGNEYES> g_aligneyes;
-EXTERN int g_numaligneyes;
-void GenerateAlignEyesAttachments();
-
-// $alignmouth: like $aligneyes, but the centroid comes from the vertices deformed by
-// a set of flexes. Each target is either a flexcontroller (by name) or a flexgroup
-// (matching flexcontroller 'type'); the driven flexes are resolved by walking the
-// flex rules (g_flexrule[] FETCH1 ops), and the affected vertices' base positions are
-// averaged. Resolved by GenerateAlignMouthAttachments (simplify.cpp).
-#define MAX_ALIGNMOUTH 8
-#define MAX_ALIGNMOUTH_TARGETS 16
-struct s_alignmouth_t {
+// $attachmentbyverts: deferred request that auto-generates an attachment from a union
+// of vertex selectors. Origin = centroid of all collected verts + offset; forward =
+// literal world-space 'forward', or the averaged vertex normals when 'forward' is
+// 0,0,0. Selectors (any combination, OR'd together):
+//   morph <flex morph>        - verts deformed by a named flex (by flexdesc)
+//   flexgroup <group/type>    - verts deformed by flexes driven by a flexcontroller group
+//   materials <material>      - verts assigned to a named material
+//   boneweight <bone> <min>   - verts whose weight to <bone> is >= min
+// Parent bone = explicit 'bone <name>' if given, else the bone with the highest
+// accumulated weight across collected verts. Stored absolute; resolved by
+// GenerateAttachmentByVertsAttachments (simplify.cpp).
+#define MAX_ATTACHMENTBYVERTS 16
+#define MAX_ATTACHBV_TARGETS 16
+struct s_attachmentbyverts_t {
     char name[MAXSTUDIONAME];                                  // attachment name
-    char groups[MAX_ALIGNMOUTH_TARGETS][MAXSTUDIONAME];        // flexgroup (type) names
-    int  numgroups;
-    char controllers[MAX_ALIGNMOUTH_TARGETS][MAXSTUDIONAME];   // flexcontroller names
-    int  numcontrollers;
+    char morphs[MAX_ATTACHBV_TARGETS][MAXSTUDIONAME];          // flex morph names
+    int  nummorphs;
+    char flexgroups[MAX_ATTACHBV_TARGETS][MAXSTUDIONAME];      // flexgroup (type) names
+    int  numflexgroups;
+    char materials[MAX_ATTACHBV_TARGETS][MAXSTUDIONAME];       // material names
+    int  nummaterials;
+    char bwBone[MAX_ATTACHBV_TARGETS][MAXSTUDIONAME];          // boneweight selector bones
+    float bwMin[MAX_ATTACHBV_TARGETS];                         // boneweight selector minimums
+    int  numboneweights;
+    char bone[MAXSTUDIONAME];   // explicit parent bone override; "" = auto by weight
     Vector offset;     // world-aligned, added to the centroid (units); default 0,0,0
     Vector forward;    // literal world-space forward; 0,0,0 = use averaged normals
     int attachIndex;   // slot reserved in g_attachment[] at parse time (preserves order)
     int linecount;
 };
-EXTERN std::array<s_alignmouth_t, MAX_ALIGNMOUTH> g_alignmouth;
-EXTERN int g_numalignmouth;
-void GenerateAlignMouthAttachments();
+EXTERN std::array<s_attachmentbyverts_t, MAX_ATTACHMENTBYVERTS> g_attachmentbyverts;
+EXTERN int g_numattachmentbyverts;
+void GenerateAttachmentByVertsAttachments();
 
 struct s_bonemerge_t {
     char bonename[MAXSTUDIONAME];
@@ -725,8 +723,8 @@ struct s_animation_t {
     bool doesOverride;
     bool nocull;
     bool ignorescale;
-    bool ignoreBoneMove;    // ignore $movebone bind-pose edits when converting this animation
-    bool ignoreBoneRotate;  // ignore $rotatebone bind-pose edits when converting this animation
+    bool ignoreTransformPosition;  // ignoretransformbindpose position: roll back $transformbindposebone position edits for this animation
+    bool ignoreTransformAngles;    // ignoretransformbindpose angles: roll back $transformbindposebone angle edits for this animation
     int index;
     char name[MAXSTUDIONAME];
     char filename[MAX_PATH];

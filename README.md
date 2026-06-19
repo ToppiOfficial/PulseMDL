@@ -60,6 +60,7 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 - New `$if`, `$elif`, `$else`, and `$switch` conditional commands
 - New `$staticproppose <animation_file> <frame>` to bake a custom pose into a `static_prop`'s geometry skeleton. Cannot be combined with `$staticprop`. **(Work in progress - does not behave as expected)**
 - New `$return <optional message>` to halt compilation with an optional message (similar to `$qcassert`)
+- New `$break <optional message>` to stop reading the QC at that point while still compiling whatever was parsed so far (unlike `$return`, which aborts without compiling)
 - New `$print <message>` for compile-time output
 - New `$deltaproportions` to generate `a_reference` and `a_proportions`. See `docs/deltaproportions.md`
 - New `$include` inline options:

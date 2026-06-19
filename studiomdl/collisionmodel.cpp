@@ -896,7 +896,7 @@ int CJointedModel::ProcessJointedModel()
 		bonespaceVerts.SetCount( m_pModel->numvertices );
 		ConvertToBoneSpace( boneIndex, bonespaceVerts );
 
-		// If $rotatebone/$movebone edited this bone's bind pose, the hull is placed
+		// If $transformbindposebone edited this bone's bind pose, the hull is placed
 		// at runtime by the edited g_bonetable transform (boneToPose_orig * D_total).
 		// Pre-multiply by Inverse(D_total) so the hull lands at its pre-edit position
 		// and still tracks the bone in ragdoll. No-op (identity) for unedited bones.
@@ -1416,7 +1416,7 @@ void CJointedModel::ProcessGenerateRequests()
 					return out;
 				} );
 
-			// Compensate $movebone/$rotatebone bind-pose edits on the joint bone, as
+			// Compensate $transformbindposebone bind-pose edits on the joint bone, as
 			// ProcessJointedModel does; no-op for unedited bones.  Child welds ride the
 			// parent's frame, so this parent-keyed correction covers the whole hull.
 			matrix3x4_t boneEditDelta;

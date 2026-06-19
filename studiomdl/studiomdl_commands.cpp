@@ -3926,92 +3926,62 @@ void Cmd_DefineBone() {
 }
 
 //-----------------------------------------------------------------------------
-// $rotatebone <bonename> <rx ry rz> [local|world]
-//   Rotates a bone's bind pose. local (DEFAULT) = about the bone's local axes;
-//   world = about the bone's own origin using world-aligned axes. Mesh stays
-//   undeformed at rest and animations remain visually identical (see
-//   ApplyBoneTransformEdits in simplify.cpp). Bone is resolved later, since the
-//   global bone table does not exist yet at parse time.
+// $transformbindposebone "bonename" [params...]
+//   Merged replacement for $rotatebone + $movebone. Edits a bone's bind pose late
+//   in the pipeline (see ApplyBoneTransformEdits in simplify.cpp). Order-independent
+//   keyword params:
+//     angles <rx ry rz>                    rotate bind orientation (local axes by default)
+//     position <x y z>                     translate bind position (local axes by default)
+//     worldangles                          'angles' uses world axes
+//     worldposition                        'position' uses world axes
+//     transformweights <residualbone> [f]  re-skin: transfer f ([0,1], default 0.55) of the
+//                                          bone's vertex weight to residualbone
+//     transformverts                       rigidly carry the bone's rigged verts at rest
+//                                          (mutually exclusive with transformweights)
+//     ignoreanimation                      edit does not flow into any $sequence/$animation
+//     ignorehitbox                         keep this bone's manual $hbox hitboxes in place
+//   This command is global/position-independent: edits are collected here and applied
+//   once, after the global bone table is built. Bone is resolved later.
 //-----------------------------------------------------------------------------
-void Cmd_RotateBone() {
+void Cmd_TransformBindPoseBone() {
     if (g_numbonetransformedits >= MAX_BONE_TRANSFORM_EDITS)
-        TokenError("$rotatebone/$movebone: exceeded combined limit of %d\n", MAX_BONE_TRANSFORM_EDITS);
+        TokenError("$transformbindposebone: exceeded limit of %d\n", MAX_BONE_TRANSFORM_EDITS);
 
     s_bonetransformedit_t &e = g_bonetransformedit[g_numbonetransformedits];
     memset(&e, 0, sizeof(e));
-    e.kind = BONEXFORM_ROTATE;
-    e.space = BONEXFORM_LOCAL;        // rotate default = local
+    e.angleSpace = BONEXFORM_LOCAL;   // default = local
+    e.posSpace = BONEXFORM_LOCAL;     // default = local
 
     GetToken(false);
     strcpyn(e.name, token);
-    GetToken(false);
-    e.v[0] = verify_atof(token);
-    GetToken(false);
-    e.v[1] = verify_atof(token);
-    GetToken(false);
-    e.v[2] = verify_atof(token);
 
     while (TokenAvailable()) {
         GetToken(false);
-        if (!V_stricmp(token, "world"))
-            e.space = BONEXFORM_WORLD;
-        else if (!V_stricmp(token, "local"))
-            e.space = BONEXFORM_LOCAL;
-        else if (!V_stricmp(token, "ignorehitbox"))
-            e.ignoreHitbox = true;
-        else {
-            UnGetToken();
-            break;
-        }
-    }
-
-    e.linecount = g_StudioMdlContext.iLinecount;
-    g_numbonetransformedits++;
-}
-
-//-----------------------------------------------------------------------------
-// $movebone <bonename> <x y z> [local|world] [moveweight <residualbone> [factor]]
-//   Translates a bone's bind pose. world (DEFAULT) = along world/model axes;
-//   local = along the bone's local axes. Optional moveweight transfers [factor]
-//   ([0,1], default 0.55) of the moved bone's vertex weight to <residualbone>
-//   (see ApplyMoveWeightQueue).
-//-----------------------------------------------------------------------------
-void Cmd_MoveBone() {
-    if (g_numbonetransformedits >= MAX_BONE_TRANSFORM_EDITS)
-        TokenError("$rotatebone/$movebone: exceeded combined limit of %d\n", MAX_BONE_TRANSFORM_EDITS);
-
-    s_bonetransformedit_t &e = g_bonetransformedit[g_numbonetransformedits];
-    memset(&e, 0, sizeof(e));
-    e.kind = BONEXFORM_MOVE;
-    e.space = BONEXFORM_WORLD;        // move default = world
-
-    GetToken(false);
-    strcpyn(e.name, token);
-    GetToken(false);
-    e.v[0] = verify_atof(token);
-    GetToken(false);
-    e.v[1] = verify_atof(token);
-    GetToken(false);
-    e.v[2] = verify_atof(token);
-
-    while (TokenAvailable()) {
-        GetToken(false);
-        if (!V_stricmp(token, "world")) {
-            e.space = BONEXFORM_WORLD;
-        } else if (!V_stricmp(token, "local")) {
-            e.space = BONEXFORM_LOCAL;
-        } else if (!V_stricmp(token, "moveweight")) {
+        if (!V_stricmp(token, "angles")) {
+            e.hasAngles = true;
+            GetToken(false); e.angles[0] = verify_atof(token);
+            GetToken(false); e.angles[1] = verify_atof(token);
+            GetToken(false); e.angles[2] = verify_atof(token);
+        } else if (!V_stricmp(token, "position")) {
+            e.hasPosition = true;
+            GetToken(false); e.pos[0] = verify_atof(token);
+            GetToken(false); e.pos[1] = verify_atof(token);
+            GetToken(false); e.pos[2] = verify_atof(token);
+        } else if (!V_stricmp(token, "worldangles")) {
+            e.angleSpace = BONEXFORM_WORLD;
+        } else if (!V_stricmp(token, "worldposition")) {
+            e.posSpace = BONEXFORM_WORLD;
+        } else if (!V_stricmp(token, "transformweights")) {
             e.hasMoveWeight = true;
             GetToken(false);
             strcpyn(e.residualbone, token);
-            // optional factor: fraction of the moved bone's weight handed to the
-            // residual bone (1 = full transfer, 0 = none). Omitted -> 0.55 default,
-            // so legacy QC without the float keeps working.
+            // optional factor: fraction of the bone's weight handed to the residual
+            // bone (1 = full transfer, 0 = none). Omitted -> 0.55 default.
             e.moveWeightFactor = 0.55f;
             if (TokenAvailable()) {
                 GetToken(false);
                 // only consume the token if it parses as a number; otherwise it is
-                // a following keyword (ignorehitbox) - put it back
+                // a following keyword - put it back
                 char *endp = nullptr;
                 float f = (float)strtod(token, &endp);
                 if (endp != token && *endp == '\0') {
@@ -4024,6 +3994,10 @@ void Cmd_MoveBone() {
                     UnGetToken();
                 }
             }
+        } else if (!V_stricmp(token, "transformverts")) {
+            e.transformVerts = true;
+        } else if (!V_stricmp(token, "ignoreanimation")) {
+            e.ignoreAnimation = true;
         } else if (!V_stricmp(token, "ignorehitbox")) {
             e.ignoreHitbox = true;
         } else {
@@ -4032,27 +4006,37 @@ void Cmd_MoveBone() {
         }
     }
 
+    if (e.transformVerts && e.hasMoveWeight)
+        TokenError("$transformbindposebone: 'transformverts' and 'transformweights' are mutually exclusive\n");
+    if (!e.hasAngles && !e.hasPosition)
+        TokenError("$transformbindposebone: requires at least one of 'angles' or 'position'\n");
+
     e.linecount = g_StudioMdlContext.iLinecount;
     g_numbonetransformedits++;
 }
 
 //-----------------------------------------------------------------------------
-// $aligneyes <name> { eyeball <name> [...] [offset <x y z>] [forward <x y z>] }
-//   Auto-generates an attachment centered on the listed eyeballs. 'forward' is a
-//   literal world-space direction (1 0 0 = world +X); if omitted/0 0 0 the averaged
-//   eyeball mesh normals are used. All eyeballs must share one bone. Filled in later
-//   by GenerateAlignEyesAttachments (simplify.cpp).
+// $attachmentbyverts <name> {
+//     morph <flex morph>        flexgroup <group/type>
+//     materials <material>      boneweight <bone> <min weight>
+//     [bone <name>] [offset <x y z>] [forward <x y z>] }
+//   Auto-generates an attachment from the union of the listed vertex selectors.
+//   Replaces the old $aligneyes (use 'materials <eye material>') and $alignmouth
+//   (use 'flexgroup'/'morph'). 'forward' is a literal world-space direction; if
+//   omitted/0 0 0 the averaged vertex normals are used. The parent bone is 'bone'
+//   if given, else the bone the collected verts are weighted to most. Filled in
+//   later by GenerateAttachmentByVertsAttachments (simplify.cpp).
 //-----------------------------------------------------------------------------
-void Cmd_AlignEyes() {
+void Cmd_AttachmentByVerts() {
     if (g_StudioMdlContext.createMakefile)
         return;
 
-    if (g_numaligneyes >= MAX_ALIGNEYES)
-        TokenError("$aligneyes: exceeded limit of %d\n", MAX_ALIGNEYES);
+    if (g_numattachmentbyverts >= MAX_ATTACHMENTBYVERTS)
+        TokenError("$attachmentbyverts: exceeded limit of %d\n", MAX_ATTACHMENTBYVERTS);
 
-    s_aligneyes_t &e = g_aligneyes[g_numaligneyes];
+    s_attachmentbyverts_t &e = g_attachmentbyverts[g_numattachmentbyverts];
     memset(&e, 0, sizeof(e));
-    e.forward.Init(0, 0, 0);     // 0,0,0 = auto (use averaged eyeball normals)
+    e.forward.Init(0, 0, 0);     // 0,0,0 = auto (use averaged vertex normals)
     e.offset.Init(0, 0, 0);
 
     // attachment name
@@ -4061,7 +4045,7 @@ void Cmd_AlignEyes() {
 
     GetToken(true);
     if (stricmp(token, "{")) {
-        MdlError("$aligneyes: expected '{', got '%s'\n", token);
+        MdlError("$attachmentbyverts: expected '{', got '%s'\n", token);
         return;
     }
 
@@ -4069,12 +4053,35 @@ void Cmd_AlignEyes() {
         if (!stricmp(token, "}"))
             break;
 
-        if (!stricmp(token, "eyeball")) {
-            if (e.numeyeballs >= MAX_ALIGNEYES_EYEBALLS)
-                TokenError("$aligneyes: too many eyeballs (max %d)\n", MAX_ALIGNEYES_EYEBALLS);
+        if (!stricmp(token, "morph")) {
+            if (e.nummorphs >= MAX_ATTACHBV_TARGETS)
+                TokenError("$attachmentbyverts: too many morphs (max %d)\n", MAX_ATTACHBV_TARGETS);
             GetToken(false);
-            strcpyn(e.eyeballs[e.numeyeballs], token);
-            e.numeyeballs++;
+            strcpyn(e.morphs[e.nummorphs], token);
+            e.nummorphs++;
+        } else if (!stricmp(token, "flexgroup")) {
+            if (e.numflexgroups >= MAX_ATTACHBV_TARGETS)
+                TokenError("$attachmentbyverts: too many flexgroups (max %d)\n", MAX_ATTACHBV_TARGETS);
+            GetToken(false);
+            strcpyn(e.flexgroups[e.numflexgroups], token);
+            e.numflexgroups++;
+        } else if (!stricmp(token, "material")) {
+            if (e.nummaterials >= MAX_ATTACHBV_TARGETS)
+                TokenError("$attachmentbyverts: too many material (max %d)\n", MAX_ATTACHBV_TARGETS);
+            GetToken(false);
+            strcpyn(e.materials[e.nummaterials], token);
+            e.nummaterials++;
+        } else if (!stricmp(token, "boneweight")) {
+            if (e.numboneweights >= MAX_ATTACHBV_TARGETS)
+                TokenError("$attachmentbyverts: too many boneweights (max %d)\n", MAX_ATTACHBV_TARGETS);
+            GetToken(false);
+            strcpyn(e.bwBone[e.numboneweights], token);
+            GetToken(false);
+            e.bwMin[e.numboneweights] = verify_atof(token);
+            e.numboneweights++;
+        } else if (!stricmp(token, "bone")) {
+            GetToken(false);
+            strcpyn(e.bone, token);
         } else if (!stricmp(token, "offset")) {
             GetToken(false); e.offset.x = verify_atof(token);
             GetToken(false); e.offset.y = verify_atof(token);
@@ -4084,17 +4091,18 @@ void Cmd_AlignEyes() {
             GetToken(false); e.forward.y = verify_atof(token);
             GetToken(false); e.forward.z = verify_atof(token);
         } else {
-            MdlError("$aligneyes: unknown option '%s'\n", token);
+            MdlError("$attachmentbyverts: unknown option '%s'\n", token);
         }
     }
 
-    if (e.numeyeballs == 0)
-        MdlError("$aligneyes \"%s\": no eyeballs specified\n", e.name);
+    if (e.nummorphs == 0 && e.numflexgroups == 0 && e.nummaterials == 0 && e.numboneweights == 0)
+        MdlError("$attachmentbyverts \"%s\": no vertex selector specified "
+                 "(morph/flexgroup/materials/boneweight)\n", e.name);
 
     // Reserve the attachment slot now to keep declaration order vs. $attachment;
-    // GenerateAlignEyesAttachments fills it once bones/sources exist.
+    // GenerateAttachmentByVertsAttachments fills it once bones/sources exist.
     if (g_numattachments >= (int)g_attachment.size())
-        TokenError("$aligneyes: too many attachments\n");
+        TokenError("$attachmentbyverts: too many attachments\n");
     e.attachIndex = g_numattachments;
     s_attachment_t &att = g_attachment[g_numattachments];
     memset(&att, 0, sizeof(att));
@@ -4102,82 +4110,7 @@ void Cmd_AlignEyes() {
     g_numattachments++;
 
     e.linecount = g_StudioMdlContext.iLinecount;
-    g_numaligneyes++;
-}
-
-//-----------------------------------------------------------------------------
-// $alignmouth <name> { flexgroup <name> | flexcontroller <name> [...] [offset ...] [forward ...] }
-//   Like $aligneyes, but centers the attachment on the vertices deformed by the
-//   listed flexes. 'flexgroup' matches a flexcontroller 'type' (group); 'flexcontroller'
-//   names a single controller. Filled in by GenerateAlignMouthAttachments
-//   (simplify.cpp).
-//-----------------------------------------------------------------------------
-void Cmd_AlignMouth() {
-    if (g_StudioMdlContext.createMakefile)
-        return;
-
-    if (g_numalignmouth >= MAX_ALIGNMOUTH)
-        TokenError("$alignmouth: exceeded limit of %d\n", MAX_ALIGNMOUTH);
-
-    s_alignmouth_t &e = g_alignmouth[g_numalignmouth];
-    memset(&e, 0, sizeof(e));
-    e.forward.Init(0, 0, 0);     // 0,0,0 = auto (use averaged flex-vertex normals)
-    e.offset.Init(0, 0, 0);
-
-    // attachment name
-    GetToken(false);
-    strcpyn(e.name, token);
-
-    GetToken(true);
-    if (stricmp(token, "{")) {
-        MdlError("$alignmouth: expected '{', got '%s'\n", token);
-        return;
-    }
-
-    while (GetToken(true)) {
-        if (!stricmp(token, "}"))
-            break;
-
-        if (!stricmp(token, "flexgroup")) {
-            if (e.numgroups >= MAX_ALIGNMOUTH_TARGETS)
-                TokenError("$alignmouth: too many flexgroups (max %d)\n", MAX_ALIGNMOUTH_TARGETS);
-            GetToken(false);
-            strcpyn(e.groups[e.numgroups], token);
-            e.numgroups++;
-        } else if (!stricmp(token, "flexcontroller")) {
-            if (e.numcontrollers >= MAX_ALIGNMOUTH_TARGETS)
-                TokenError("$alignmouth: too many flexcontrollers (max %d)\n", MAX_ALIGNMOUTH_TARGETS);
-            GetToken(false);
-            strcpyn(e.controllers[e.numcontrollers], token);
-            e.numcontrollers++;
-        } else if (!stricmp(token, "offset")) {
-            GetToken(false); e.offset.x = verify_atof(token);
-            GetToken(false); e.offset.y = verify_atof(token);
-            GetToken(false); e.offset.z = verify_atof(token);
-        } else if (!stricmp(token, "forward")) {
-            GetToken(false); e.forward.x = verify_atof(token);
-            GetToken(false); e.forward.y = verify_atof(token);
-            GetToken(false); e.forward.z = verify_atof(token);
-        } else {
-            MdlError("$alignmouth: unknown option '%s'\n", token);
-        }
-    }
-
-    if (e.numgroups == 0 && e.numcontrollers == 0)
-        MdlError("$alignmouth \"%s\": no flexgroup/flexcontroller specified\n", e.name);
-
-    // Reserve the attachment slot now to keep declaration order vs. $attachment;
-    // GenerateAlignMouthAttachments fills it once flexes are resolved.
-    if (g_numattachments >= (int)g_attachment.size())
-        TokenError("$alignmouth: too many attachments\n");
-    e.attachIndex = g_numattachments;
-    s_attachment_t &att = g_attachment[g_numattachments];
-    memset(&att, 0, sizeof(att));
-    strcpyn(att.name, e.name);
-    g_numattachments++;
-
-    e.linecount = g_StudioMdlContext.iLinecount;
-    g_numalignmouth++;
+    g_numattachmentbyverts++;
 }
 
 bool ParseJiggleAngleConstraint(s_jigglebone_t *jiggleInfo) {
@@ -6171,13 +6104,17 @@ bool ParseAnimationToken(s_animation_t *panim) {
         return true;
     }
 
-    if (!Q_stricmp("ignorebonemove", token)) {
-        panim->ignoreBoneMove = true;
-        return true;
-    }
-
-    if (!Q_stricmp("ignorebonerotate", token)) {
-        panim->ignoreBoneRotate = true;
+    if (!Q_stricmp("ignoretransformbindpose", token)) {
+        // ignoretransformbindpose <angles|position>: roll back the named category of
+        // $transformbindposebone edits when converting this animation.
+        GetToken(false);
+        if (!Q_stricmp("angles", token)) {
+            panim->ignoreTransformAngles = true;
+        } else if (!Q_stricmp("position", token)) {
+            panim->ignoreTransformPosition = true;
+        } else {
+            TokenError("ignoretransformbindpose: expected 'angles' or 'position', got '%s'\n", token);
+        }
         return true;
     }
 
@@ -8951,6 +8888,23 @@ void Cmd_Return() {
     exit(0);
 }
 
+//-----------------------------------------------------------------------------
+// Stops reading the QC at this point. Anything after $break (including in any
+// parent script that $included it) is ignored, but the model still compiles
+// with whatever was parsed so far (unlike $return, which aborts without
+// compiling).
+//-----------------------------------------------------------------------------
+extern bool g_bScriptBreak;
+void Cmd_Break() {
+    if (TokenAvailable()) {
+        GetToken(false);
+        Msg("$break: %s\n", token);
+    } else {
+        Msg("$break: stopping QC parsing.\n");
+    }
+    g_bScriptBreak = true;
+}
+
 //
 // This is the master list of the commands a QC file supports.
 // To add a new command to the QC files, add it here.
@@ -9005,8 +8959,7 @@ MDLCommand_t g_Commands[] =
                 {"$contents",                        Cmd_Contents,},
                 {"$jointcontents",                   Cmd_JointContents,},
                 {"$attachment",                      Cmd_Attachment,},
-                {"$aligneyes",                       Cmd_AlignEyes,},
-                {"$alignmouth",                      Cmd_AlignMouth,},
+                {"$attachmentbyverts",               Cmd_AttachmentByVerts,},
                 {"$redefineattachment",              Cmd_RedefineAttachment,},
                 {"$bonemerge",                       Cmd_BoneMerge,},
                 {"$bonealwayssetup",                 Cmd_BoneAlwaysSetup,},
@@ -9037,8 +8990,7 @@ MDLCommand_t g_Commands[] =
                 {"$insertbone",                      Cmd_InsertHierarchy,},
                 {"$limitrotation",                   Cmd_LimitRotation,},
                 {"$definebone",                      Cmd_DefineBone,},
-                {"$rotatebone",                      Cmd_RotateBone,},
-                {"$movebone",                        Cmd_MoveBone,},
+                {"$transformbindposebone",           Cmd_TransformBindPoseBone,},
                 {"$jigglebone",                      Cmd_JiggleBone,},
                 {"$includemodel",                    Cmd_IncludeModel,},
                 {"$opaque",                          Cmd_Opaque,},
@@ -9090,6 +9042,7 @@ MDLCommand_t g_Commands[] =
                 {"$default",                          Cmd_Default,},
                 {"$deltaproportions",                 Cmd_DeltaProportions,},
                 {"$return",                           Cmd_Return,},
+                {"$break",                            Cmd_Break,},
                 {"$print",                            Cmd_Print,},
         };
 

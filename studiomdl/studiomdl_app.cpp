@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *KITSUNE_MDL_VERSION = "0.3.4";
+static const char *KITSUNE_MDL_VERSION = "0.3.6";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -129,10 +129,17 @@ void ParseGameInfo() {
 ParseScript
 ===============
 */
+// Set by Cmd_Break ($break) to stop reading the rest of the QC. Sticky across
+// the $include script stack so parsing ends everywhere, not just in the file
+// that contained $break (endofscript gets reset on every script push/pop).
+bool g_bScriptBreak = false;
+
 void ParseScript(const char *pExt) {
     while (1) {
         GetToken(true);
         if (endofscript)
+            return;
+        if (g_bScriptBreak)        // $break: stop reading the rest of the QC
             return;
 
         // Check all the commands we know about.

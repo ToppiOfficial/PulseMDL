@@ -1609,7 +1609,7 @@ ConvertAnimation(const s_source_t *psource, const char *pAnimationName, int fram
 //-----------------------------------------------------------------------------
 // Purpose: copy the raw animation data from the source files into the individual animations
 //-----------------------------------------------------------------------------
-// Per-animation $rotatebone/$movebone opt-out. Defined near ApplyBoneTransformEdits.
+// Per-animation $transformbindposebone opt-out. Defined near ApplyBoneTransformEdits.
 struct s_srcrealignsave_t {
     int bone;
     matrix3x4_t saved;
@@ -6188,7 +6188,7 @@ static void TagWorldAlignedBones() {
 }
 
 //-----------------------------------------------------------------------------
-// Shared tail for $aligneyes / $alignmouth: fill the reserved attachment slot at
+// Shared tail for $attachmentbyverts: fill the reserved attachment slot at
 // 'attachIndex' with an absolute transform built from a world-space origin and a
 // forward direction (reqForward if non-zero, else the averaged normalSum). Stored
 // IS_ABSOLUTE so LinkAttachments converts it into the bone's local space.
@@ -6228,163 +6228,202 @@ static void FillAlignAttachment(const char *cmd, int attachIndex, const char *at
 }
 
 //-----------------------------------------------------------------------------
-// $aligneyes: fill each reserved attachment slot from its eyeballs (centroid origin,
-// 'forward' or averaged-normal direction). Runs before LinkAttachments so the
-// IS_ABSOLUTE result is converted into bone-local space by the normal link pass.
+// Name-match an existing material/texture in g_texture[] (basename, no extension),
+// without the entry-creating side effect of LookupTexture. Returns -1 if not found.
 //-----------------------------------------------------------------------------
-void GenerateAlignEyesAttachments() {
-    for (int a = 0; a < g_numaligneyes; a++) {
-        const s_aligneyes_t &req = g_aligneyes[a];
-
-        Vector posSum(0, 0, 0);
-        Vector normalSum(0, 0, 0);
-        int vertCount = 0;
-        int sharedBone = -1;
-        const char *sharedBoneName = NULL;
-
-        for (int ei = 0; ei < req.numeyeballs; ei++) {
-            const char *eyeballName = req.eyeballs[ei];
-
-            // find the named eyeball across all base models
-            s_eyeball_t *peyeball = NULL;
-            s_source_t *psource = NULL;
-            for (int m = 0; m < g_nummodelsbeforeLOD && !peyeball; m++) {
-                for (int j = 0; j < g_model[m]->numeyeballs; j++) {
-                    if (!Q_stricmp(g_model[m]->eyeball[j].name, eyeballName)) {
-                        peyeball = &g_model[m]->eyeball[j];
-                        psource = g_model[m]->source;
-                        break;
-                    }
-                }
-            }
-            if (!peyeball)
-                MdlError("$aligneyes \"%s\": unknown eyeball \"%s\" (line %d)\n",
-                         req.name, eyeballName, req.linecount);
-
-            int material = psource->meshindex[peyeball->mesh];
-            // eyeball->bone is still local here; resolve to a global bone
-            int globalBone = psource->boneLocalToGlobal[peyeball->bone];
-            if (sharedBone == -1) {
-                sharedBone = globalBone;
-                sharedBoneName = g_bonetable[globalBone].name;
-            } else if (globalBone != sharedBone) {
-                MdlError("$aligneyes \"%s\": eyeball \"%s\" is bound to bone \"%s\" but "
-                         "another eyeball uses \"%s\" - all eyeballs must share one bone\n",
-                         req.name, eyeballName, g_bonetable[globalBone].name, sharedBoneName);
-            }
-
-            // accumulate model-space positions (centroid) and normals (auto direction)
-            for (int v = 0; v < psource->numvertices; v++) {
-                if (psource->vertex[v].material != material)
-                    continue;
-                posSum += psource->vertex[v].position;
-                normalSum += psource->vertex[v].normal;
-                vertCount++;
-            }
-        }
-
-        if (vertCount == 0)
-            MdlError("$aligneyes \"%s\": no vertices found for the listed eyeballs\n", req.name);
-
-        // origin = centroid + offset (world-aligned)
-        Vector origin = posSum / (float)vertCount + req.offset;
-
-        FillAlignAttachment("$aligneyes", req.attachIndex, req.name, sharedBoneName,
-                            origin, req.forward, normalSum);
+static int FindTextureByName(const char *pName) {
+    char wantNoExt[MAX_PATH], wantBase[MAX_PATH], haveBase[MAX_PATH];
+    Q_StripExtension(pName, wantNoExt, sizeof(wantNoExt));
+    Q_FileBase(pName, wantBase, sizeof(wantBase));
+    for (int i = 0; i < g_numtextures; i++) {
+        if (!Q_stricmp(wantNoExt, g_texture[i].name))
+            return i;
+        Q_FileBase(g_texture[i].name, haveBase, sizeof(haveBase));
+        if (!Q_stricmp(wantBase, haveBase))
+            return i;
     }
+    return -1;
 }
 
 //-----------------------------------------------------------------------------
-// $alignmouth: centroid the vertices deformed by the listed flexes. The driven
-// flexes are found by walking the flex rules (a FETCH1 op references a flex
-// controller); each matched flexkey's vanim verts index the model's LOD vertex pool.
+// $attachmentbyverts: fill each reserved attachment slot from the union of its vertex
+// selectors (morph/flexgroup/materials/boneweight). Positions/normals are accumulated
+// into running sums and the centroid + averaged normal define the attachment; the
+// parent bone is the explicit override or the most-weighted bone of the collected
+// verts. Runs before LinkAttachments so the IS_ABSOLUTE result is converted into
+// bone-local space by the normal link pass.
+//
+// morph/flexgroup pull from the model LOD pool (flexkey vanim verts index it);
+// materials/boneweight pull from each source's local vertex array (bone indices there
+// are local, so they are mapped to global via boneLocalToGlobal[]).
 //-----------------------------------------------------------------------------
-void GenerateAlignMouthAttachments() {
-    if (g_numalignmouth == 0)
-        return;
+void GenerateAttachmentByVertsAttachments() {
+    for (int a = 0; a < g_numattachmentbyverts; a++) {
+        const s_attachmentbyverts_t &req = g_attachmentbyverts[a];
 
-    for (int a = 0; a < g_numalignmouth; a++) {
-        const s_alignmouth_t &req = g_alignmouth[a];
-
-        // 1) resolve target flex controllers (by name and by group/type)
-        bool ctrlUsed[MAXSTUDIOFLEXCTRL] = {false};
-        int numCtrl = 0;
-        for (int c = 0; c < g_numflexcontrollers; c++) {
-            bool match = false;
-            for (int g = 0; g < req.numgroups && !match; g++)
-                if (!Q_stricmp(g_flexcontroller[c].type, req.groups[g]))
-                    match = true;
-            for (int n = 0; n < req.numcontrollers && !match; n++)
-                if (!Q_stricmp(g_flexcontroller[c].name, req.controllers[n]))
-                    match = true;
-            if (match) {
-                ctrlUsed[c] = true;
-                numCtrl++;
-            }
-        }
-        if (numCtrl == 0)
-            MdlError("$alignmouth \"%s\": no matching flexcontroller/flexgroup (line %d)\n",
-                     req.name, req.linecount);
-
-        // 2) any flexrule that FETCH1's a matched controller drives its flexdesc
-        bool descDriven[MAXSTUDIOFLEXDESC] = {false};
-        for (int r = 0; r < g_numflexrules; r++) {
-            const s_flexrule_t &rule = g_flexrule[r];
-            for (int o = 0; o < rule.numops; o++) {
-                if (rule.op[o].op == STUDIO_FETCH1 &&
-                    rule.op[o].d.index >= 0 && rule.op[o].d.index < MAXSTUDIOFLEXCTRL &&
-                    ctrlUsed[rule.op[o].d.index]) {
-                    if (rule.flex >= 0 && rule.flex < MAXSTUDIOFLEXDESC)
-                        descDriven[rule.flex] = true;
-                    break;
-                }
-            }
-        }
-
-        // 3) average the base positions/normals of verts touched by flexkeys with a
-        //    driven desc, and accumulate bone weights to pick the parent bone.
-        //    After RemapVertexAnimations, vanim[].vertex indexes the model's LOD pool.
         Vector posSum(0, 0, 0);
         Vector normalSum(0, 0, 0);
         int vertCount = 0;
         static float weightAccum[MAXSTUDIOBONES];
         memset(weightAccum, 0, sizeof(weightAccum));
-        for (int k = 0; k < g_numflexkeys; k++) {
-            const s_flexkey_t &fk = g_flexkey[k];
-            if (fk.flexdesc < 0 || fk.flexdesc >= MAXSTUDIOFLEXDESC || !descDriven[fk.flexdesc])
-                continue;
-            s_loddata_t *pLod = g_model[fk.imodel]->m_pLodData;
-            if (!pLod)
-                continue;
-            for (int v = 0; v < fk.numvanims; v++) {
-                int vi = fk.vanim[v].vertex;
-                if (vi < 0 || vi >= pLod->numvertices)
+
+        // --- flex-driven selectors (morph + flexgroup): resolve the set of driven
+        //     flexdescs, then accumulate verts from matching flexkeys' LOD pool. ---
+        bool descDriven[MAXSTUDIOFLEXDESC] = {false};
+        bool anyFlexSelector = (req.nummorphs > 0 || req.numflexgroups > 0);
+
+        // morph: each named morph maps directly to a flexdesc (FACS name)
+        for (int n = 0; n < req.nummorphs; n++) {
+            int found = -1;
+            for (int d = 0; d < g_numflexdesc; d++)
+                if (!Q_stricmp(g_flexdesc[d].FACS, req.morphs[n])) { found = d; break; }
+            if (found < 0)
+                MdlError("$attachmentbyverts \"%s\": unknown morph \"%s\" (line %d)\n",
+                         req.name, req.morphs[n], req.linecount);
+            descDriven[found] = true;
+        }
+
+        // flexgroup: match flexcontroller 'type', then any flexrule FETCH1'ing a matched
+        // controller drives its flexdesc (same resolution the old $alignmouth used)
+        if (req.numflexgroups > 0) {
+            bool ctrlUsed[MAXSTUDIOFLEXCTRL] = {false};
+            int numCtrl = 0;
+            for (int c = 0; c < g_numflexcontrollers; c++) {
+                bool match = false;
+                for (int g = 0; g < req.numflexgroups && !match; g++)
+                    if (!Q_stricmp(g_flexcontroller[c].type, req.flexgroups[g]))
+                        match = true;
+                if (match) { ctrlUsed[c] = true; numCtrl++; }
+            }
+            if (numCtrl == 0)
+                MdlError("$attachmentbyverts \"%s\": no flexcontroller matched the listed "
+                         "flexgroup(s) (line %d)\n", req.name, req.linecount);
+
+            for (int r = 0; r < g_numflexrules; r++) {
+                const s_flexrule_t &rule = g_flexrule[r];
+                for (int o = 0; o < rule.numops; o++) {
+                    if (rule.op[o].op == STUDIO_FETCH1 &&
+                        rule.op[o].d.index >= 0 && rule.op[o].d.index < MAXSTUDIOFLEXCTRL &&
+                        ctrlUsed[rule.op[o].d.index]) {
+                        if (rule.flex >= 0 && rule.flex < MAXSTUDIOFLEXDESC)
+                            descDriven[rule.flex] = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (anyFlexSelector) {
+            // After RemapVertexAnimations, vanim[].vertex indexes the model's LOD pool.
+            for (int k = 0; k < g_numflexkeys; k++) {
+                const s_flexkey_t &fk = g_flexkey[k];
+                if (fk.flexdesc < 0 || fk.flexdesc >= MAXSTUDIOFLEXDESC || !descDriven[fk.flexdesc])
                     continue;
-                posSum += pLod->vertex[vi].position;
-                normalSum += pLod->vertex[vi].normal;
-                vertCount++;
-                const s_boneweight_t &bw = pLod->vertex[vi].boneweight;
-                for (int b = 0; b < bw.numbones; b++)
-                    if (bw.bone[b] >= 0 && bw.bone[b] < MAXSTUDIOBONES)
-                        weightAccum[bw.bone[b]] += bw.weight[b];
+                s_loddata_t *pLod = g_model[fk.imodel]->m_pLodData;
+                if (!pLod)
+                    continue;
+                for (int v = 0; v < fk.numvanims; v++) {
+                    int vi = fk.vanim[v].vertex;
+                    if (vi < 0 || vi >= pLod->numvertices)
+                        continue;
+                    posSum += pLod->vertex[vi].position;
+                    normalSum += pLod->vertex[vi].normal;
+                    vertCount++;
+                    const s_boneweight_t &bw = pLod->vertex[vi].boneweight;
+                    for (int b = 0; b < bw.numbones; b++)
+                        if (bw.bone[b] >= 0 && bw.bone[b] < MAXSTUDIOBONES)
+                            weightAccum[bw.bone[b]] += bw.weight[b];
+                }
+            }
+        }
+
+        // --- geometry selectors (materials + boneweight): scan each base model's
+        //     local source verts. vertex[].material is a global texture index; bone
+        //     indices are local and mapped to global via boneLocalToGlobal[]. ---
+        bool anyGeomSelector = (req.nummaterials > 0 || req.numboneweights > 0);
+        if (anyGeomSelector) {
+            // resolve material names to texture indices once
+            int matIndex[MAX_ATTACHBV_TARGETS];
+            for (int n = 0; n < req.nummaterials; n++) {
+                matIndex[n] = FindTextureByName(req.materials[n]);
+                if (matIndex[n] < 0)
+                    MdlError("$attachmentbyverts \"%s\": unknown material \"%s\" (line %d)\n",
+                             req.name, req.materials[n], req.linecount);
+            }
+            // resolve boneweight selector bones to global indices once
+            int bwGlobal[MAX_ATTACHBV_TARGETS];
+            for (int n = 0; n < req.numboneweights; n++) {
+                bwGlobal[n] = findGlobalBone(req.bwBone[n]);
+                if (bwGlobal[n] < 0)
+                    MdlError("$attachmentbyverts \"%s\": unknown boneweight bone \"%s\" (line %d)\n",
+                             req.name, req.bwBone[n], req.linecount);
+            }
+
+            for (int m = 0; m < g_nummodelsbeforeLOD; m++) {
+                s_source_t *psource = g_model[m]->source;
+                if (!psource)
+                    continue;
+                for (int v = 0; v < psource->numvertices; v++) {
+                    const s_vertexinfo_t &vert = psource->vertex[v];
+                    bool match = false;
+
+                    // material selector: vertex material matches any listed material
+                    for (int n = 0; n < req.nummaterials && !match; n++)
+                        if (vert.material == matIndex[n])
+                            match = true;
+
+                    // boneweight selector: vertex weight to the named global bone >= min
+                    for (int n = 0; n < req.numboneweights && !match; n++) {
+                        const s_boneweight_t &bw = vert.boneweight;
+                        for (int b = 0; b < bw.numbones; b++) {
+                            if (psource->boneLocalToGlobal[bw.bone[b]] == bwGlobal[n] &&
+                                bw.weight[b] >= req.bwMin[n]) {
+                                match = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!match)
+                        continue;
+
+                    posSum += vert.position;
+                    normalSum += vert.normal;
+                    vertCount++;
+                    const s_boneweight_t &bw = vert.boneweight;
+                    for (int b = 0; b < bw.numbones; b++) {
+                        int gb = psource->boneLocalToGlobal[bw.bone[b]];
+                        if (gb >= 0 && gb < MAXSTUDIOBONES)
+                            weightAccum[gb] += bw.weight[b];
+                    }
+                }
             }
         }
 
         if (vertCount == 0)
-            MdlError("$alignmouth \"%s\": the matched flexes deform no vertices\n", req.name);
+            MdlError("$attachmentbyverts \"%s\": the selectors collected no vertices (line %d)\n",
+                     req.name, req.linecount);
 
-        // parent bone = the one the deformed verts are weighted to most
+        // parent bone: explicit override, else the bone the collected verts weight to most
         int bestBone = -1;
-        float bestWeight = 0.0f;
-        for (int b = 0; b < g_StudioMdlContext.numbones && b < MAXSTUDIOBONES; b++)
-            if (weightAccum[b] > bestWeight) { bestWeight = weightAccum[b]; bestBone = b; }
-        if (bestBone < 0)
-            MdlError("$alignmouth \"%s\": could not determine a bone for the deformed verts\n", req.name);
+        if (req.bone[0]) {
+            bestBone = findGlobalBone(req.bone);
+            if (bestBone < 0)
+                MdlError("$attachmentbyverts \"%s\": unknown bone \"%s\" (line %d)\n",
+                         req.name, req.bone, req.linecount);
+        } else {
+            float bestWeight = 0.0f;
+            for (int b = 0; b < g_StudioMdlContext.numbones && b < MAXSTUDIOBONES; b++)
+                if (weightAccum[b] > bestWeight) { bestWeight = weightAccum[b]; bestBone = b; }
+            if (bestBone < 0)
+                MdlError("$attachmentbyverts \"%s\": could not determine a bone for the "
+                         "collected verts; specify 'bone <name>' (line %d)\n", req.name, req.linecount);
+        }
 
         // origin = centroid + offset (world-aligned)
         Vector origin = posSum / (float)vertCount + req.offset;
 
-        FillAlignAttachment("$alignmouth", req.attachIndex, req.name,
+        FillAlignAttachment("$attachmentbyverts", req.attachIndex, req.name,
                             g_bonetable[bestBone].name, origin, req.forward, normalSum);
     }
 }
@@ -8196,7 +8235,7 @@ void SetupHitBoxes() {
                 if (k != -1) {
                     set->hitbox[j].bone = k;
 
-                    // $movebone/$rotatebone ... ignorehitbox: compensate this manual
+                    // $transformbindposebone ... ignorehitbox: compensate this manual
                     // hitbox by the inverse bind-pose edit so it stays put in world
                     // space. The hitbox is an OBB whose bone-space transform is
                     // Rot(angOffsetOrientation) (rotation about the bone origin).
@@ -8457,18 +8496,27 @@ static void InjectDummyBindPoseSequence() {
 }
 
 //-----------------------------------------------------------------------------
-// $rotatebone / $movebone support.
+// $transformbindposebone support
 //
 // These relocate a bone's bind pose late in the pipeline (after RemapBones /
-// RealignBones have built the global skeleton) WITHOUT deforming the rest mesh
-// and WITHOUT changing how animations look. The trick: express the edit as a
-// change of bind frame, delta D = boneToPose^-1 * newBoneToPose, and fold it
-// into srcRealign. TranslateAnimations() applies srcRealign to BOTH the vertex
-// binding (RemapVerticesToGlobalBones) and every animation frame
+// RealignBones have built the global skeleton). The default ('pivot-only') edit
+// does NOT deform the rest mesh and does NOT change how animations look: express
+// the edit as a change of bind frame, delta D = boneToPose^-1 * newBoneToPose,
+// and fold it into srcRealign. TranslateAnimations() applies srcRealign to BOTH
+// the vertex binding (RemapVerticesToGlobalBones) and every animation frame
 // (ConvertAnimation), so:
 //   destBoneToWorld_new = destBoneToWorld_old * D ,  boneToPose_new = boneToPose_old * D
 // and the rest vertex boneToPose * destBoneToWorld^-1 * v is unchanged (the
 // D / D^-1 cancel). This is the same mechanism RealignBones already relies on.
+//
+// 'transformverts' is the opt-in to instead rigidly CARRY the bone's rigged verts
+// at rest: boneToPose is moved but D is NOT folded into srcRealign, so the rest
+// vertex no longer cancels and the mesh follows the bone (animations stay on the
+// un-edited bind frame for that edit - a rest-pose authoring change).
+//
+// An edit can carry both an 'angles' (rotate) and a 'position' (move) part. We
+// split it into up to two per-category deltas so the per-animation rollback
+// (ignoretransformbindpose angles|position) can drop just one category.
 //-----------------------------------------------------------------------------
 
 struct s_moveweightreq_t {
@@ -8479,11 +8527,15 @@ struct s_moveweightreq_t {
 static CUtlVector<s_moveweightreq_t> g_moveWeightQueue;
 
 // Record of each applied bind-pose edit (resolved bone + category + local-frame
-// delta), so animations flagged ignorebonemove/ignorebonerotate can be converted
-// with the relevant deltas rolled back. See PushAnimSrcRealignOverride.
+// delta), so animations flagged ignoretransformbindpose angles|position can be
+// converted with the relevant deltas rolled back. 'ignoreAnim' marks an edit that
+// is rolled back for EVERY animation (the 'ignoreanimation' keyword).
+// See PushAnimSrcRealignOverride.
 struct s_appliededit_t {
     int bone;
     BoneXformKind kind;
+    bool ignoreAnim;
+    bool transformVerts;   // delta was NOT folded into srcRealign (rest verts carry it)
     matrix3x4_t D;
 };
 static CUtlVector<s_appliededit_t> g_appliedBoneEdits;
@@ -8491,46 +8543,83 @@ static matrix3x4_t g_origSrcRealign[MAXSTUDIOBONES];   // srcRealign before the 
 static bool g_hasOrigSrcRealign[MAXSTUDIOBONES];
 static bool g_boneEditIgnoreHitbox[MAXSTUDIOBONES];    // bone had an edit with 'ignorehitbox'
 
-static void ComputeNewBindPose(const s_bonetransformedit_t &ed, const matrix3x4_t &B, matrix3x4_t &Bnew) {
+// Apply just the rotation (angles) part of an edit to bind frame B -> Bnew.
+static void ApplyAnglePart(const s_bonetransformedit_t &ed, const matrix3x4_t &B, matrix3x4_t &Bnew) {
     Vector O;
     MatrixGetColumn(B, 3, O);
 
-    if (ed.kind == BONEXFORM_ROTATE) {
-        // Use QAngle so rx/ry/rz match the $definebone angle convention.
-        QAngle ang;
-        ang.x = ed.v[0];
-        ang.y = ed.v[1];
-        ang.z = ed.v[2];
-        matrix3x4_t R;
-        AngleMatrix(ang, R);   // rotation only, no translation
+    // Use QAngle so rx/ry/rz match the $definebone angle convention.
+    QAngle ang(ed.angles[0], ed.angles[1], ed.angles[2]);
+    matrix3x4_t R;
+    AngleMatrix(ang, R);   // rotation only, no translation
 
-        if (ed.space == BONEXFORM_LOCAL) {
-            // rotate about the bone's own local axes; origin preserved
-            ConcatTransforms(B, R, Bnew);
-        } else {
-            // rotate orientation by world axes, pin origin to O
-            matrix3x4_t M;
-            ConcatTransforms(R, B, M);
-            MatrixCopy(M, Bnew);
-            MatrixSetColumn(O, 3, Bnew);
-        }
+    if (ed.angleSpace == BONEXFORM_LOCAL) {
+        // rotate about the bone's own local axes; origin preserved
+        ConcatTransforms(B, R, Bnew);
     } else {
-        // BONEXFORM_MOVE
-        Vector delta;
-        if (ed.space == BONEXFORM_LOCAL) {
-            // translate along the bone's own axes
-            Vector fwd, left, up;
-            MatrixGetColumn(B, 0, fwd);
-            MatrixGetColumn(B, 1, left);
-            MatrixGetColumn(B, 2, up);
-            delta = fwd * ed.v[0] + left * ed.v[1] + up * ed.v[2];
-        } else {
-            // translate along world/model axes
-            delta.Init(ed.v[0], ed.v[1], ed.v[2]);
-        }
-        MatrixCopy(B, Bnew);
-        MatrixSetColumn(O + delta, 3, Bnew);
+        // rotate orientation by world axes, pin origin to O
+        matrix3x4_t M;
+        ConcatTransforms(R, B, M);
+        MatrixCopy(M, Bnew);
+        MatrixSetColumn(O, 3, Bnew);
     }
+}
+
+// Apply just the translation (position) part of an edit to bind frame B -> Bnew.
+static void ApplyPositionPart(const s_bonetransformedit_t &ed, const matrix3x4_t &B, matrix3x4_t &Bnew) {
+    Vector O;
+    MatrixGetColumn(B, 3, O);
+
+    Vector delta;
+    if (ed.posSpace == BONEXFORM_LOCAL) {
+        // translate along the bone's own axes
+        Vector fwd, left, up;
+        MatrixGetColumn(B, 0, fwd);
+        MatrixGetColumn(B, 1, left);
+        MatrixGetColumn(B, 2, up);
+        delta = fwd * ed.pos[0] + left * ed.pos[1] + up * ed.pos[2];
+    } else {
+        // translate along world/model axes
+        delta.Init(ed.pos[0], ed.pos[1], ed.pos[2]);
+    }
+    MatrixCopy(B, Bnew);
+    MatrixSetColumn(O + delta, 3, Bnew);
+}
+
+// Folds one per-category delta D into bone t: updates boneToPose, records the
+// applied edit, and (unless transformVerts) folds D into srcRealign so the rest
+// mesh and animations stay consistent.
+static void FoldBoneEditDelta(int t, BoneXformKind kind, const matrix3x4_t &Bold,
+                              const matrix3x4_t &Bnew, const s_bonetransformedit_t &ed) {
+    // local-frame delta D = Bold^-1 * Bnew
+    matrix3x4_t BoldInv, D;
+    MatrixInvert(Bold, BoldInv);
+    ConcatTransforms(BoldInv, Bnew, D);
+
+    // snapshot the pre-edit srcRealign for this bone (once), so per-animation
+    // ignore flags can roll edits back later
+    if (t < MAXSTUDIOBONES && !g_hasOrigSrcRealign[t]) {
+        MatrixCopy(g_bonetable[t].srcRealign, g_origSrcRealign[t]);
+        g_hasOrigSrcRealign[t] = true;
+    }
+
+    if (!ed.transformVerts) {
+        // fold the delta into srcRealign so vertices AND animation frames stay
+        // consistent (both consume srcRealign via TranslateAnimations)
+        matrix3x4_t tmp;
+        ConcatTransforms(g_bonetable[t].srcRealign, D, tmp);
+        MatrixCopy(tmp, g_bonetable[t].srcRealign);
+    }
+    // transformverts: skip the srcRealign fold so the rest verts follow boneToPose
+    MatrixCopy(Bnew, g_bonetable[t].boneToPose);
+
+    s_appliededit_t ae;
+    ae.bone = t;
+    ae.kind = kind;
+    ae.ignoreAnim = ed.ignoreAnimation;
+    ae.transformVerts = ed.transformVerts;
+    MatrixCopy(D, ae.D);
+    g_appliedBoneEdits.AddToTail(ae);
 }
 
 void ApplyBoneTransformEdits() {
@@ -8547,48 +8636,36 @@ void ApplyBoneTransformEdits() {
         const s_bonetransformedit_t &ed = g_bonetransformedit[e];
         int t = findGlobalBone(ed.name);
         if (t == -1) {
-            MdlWarning("%s: unknown bone \"%s\" (line %d) - skipped\n",
-                       ed.kind == BONEXFORM_ROTATE ? "$rotatebone" : "$movebone", ed.name, ed.linecount);
+            MdlWarning("$transformbindposebone: unknown bone \"%s\" (line %d) - skipped\n",
+                       ed.name, ed.linecount);
             continue;
         }
 
-        matrix3x4_t Bold, Bnew;
-        MatrixCopy(g_bonetable[t].boneToPose, Bold);
-        ComputeNewBindPose(ed, Bold, Bnew);
-
-        // local-frame delta D = Bold^-1 * Bnew
-        matrix3x4_t BoldInv, D;
-        MatrixInvert(Bold, BoldInv);
-        ConcatTransforms(BoldInv, Bnew, D);
-
-        // snapshot the pre-edit srcRealign for this bone (once), so per-animation
-        // ignore flags can roll edits back later
-        if (t < MAXSTUDIOBONES && !g_hasOrigSrcRealign[t]) {
-            MatrixCopy(g_bonetable[t].srcRealign, g_origSrcRealign[t]);
-            g_hasOrigSrcRealign[t] = true;
+        // Apply the angle part then the position part, each as its own category
+        // delta. The position part is computed on the post-rotation frame so the
+        // two compose in a stable order.
+        if (ed.hasAngles) {
+            matrix3x4_t Bold, Bnew;
+            MatrixCopy(g_bonetable[t].boneToPose, Bold);
+            ApplyAnglePart(ed, Bold, Bnew);
+            FoldBoneEditDelta(t, BONEXFORM_ROTATE, Bold, Bnew, ed);
+            bChanged = true;
         }
-
-        // fold the delta into srcRealign so vertices AND animation frames stay
-        // consistent (both consume srcRealign via TranslateAnimations)
-        matrix3x4_t tmp;
-        ConcatTransforms(g_bonetable[t].srcRealign, D, tmp);
-        MatrixCopy(tmp, g_bonetable[t].srcRealign);
-        MatrixCopy(Bnew, g_bonetable[t].boneToPose);
-        bChanged = true;
-
-        s_appliededit_t ae;
-        ae.bone = t;
-        ae.kind = ed.kind;
-        MatrixCopy(D, ae.D);
-        g_appliedBoneEdits.AddToTail(ae);
+        if (ed.hasPosition) {
+            matrix3x4_t Bold, Bnew;
+            MatrixCopy(g_bonetable[t].boneToPose, Bold);
+            ApplyPositionPart(ed, Bold, Bnew);
+            FoldBoneEditDelta(t, BONEXFORM_MOVE, Bold, Bnew, ed);
+            bChanged = true;
+        }
 
         if (t < MAXSTUDIOBONES && ed.ignoreHitbox)
             g_boneEditIgnoreHitbox[t] = true;
 
-        if (ed.kind == BONEXFORM_MOVE && ed.hasMoveWeight) {
+        if (ed.hasMoveWeight) {
             int r = findGlobalBone(ed.residualbone);
             if (r == -1) {
-                MdlWarning("$movebone moveweight: unknown residual bone \"%s\" (line %d)\n",
+                MdlWarning("$transformbindposebone transformweights: unknown residual bone \"%s\" (line %d)\n",
                            ed.residualbone, ed.linecount);
             }
             s_moveweightreq_t req = {t, r, ed.moveWeightFactor};
@@ -8606,7 +8683,7 @@ void ApplyBoneTransformEdits() {
 }
 
 // Returns the accumulated bind-pose edit delta applied to a global bone (the
-// ordered product of its $rotatebone/$movebone deltas, such that
+// ordered product of its $transformbindposebone deltas, such that
 // boneToPose_final = boneToPose_orig * D_total). Returns false if the bone had no
 // edits. Used by the collision builder to keep ragdoll hulls aligned to the edit.
 bool GetAccumulatedBoneEditDelta(int globalBone, matrix3x4_t &outD) {
@@ -8624,7 +8701,7 @@ bool GetAccumulatedBoneEditDelta(int globalBone, matrix3x4_t &outD) {
     return true;
 }
 
-// Returns true if bone t had a $rotatebone/$movebone with 'ignorehitbox', and
+// Returns true if bone t had a $transformbindposebone with 'ignorehitbox', and
 // outputs Inverse(accumulated edit delta) to pre-apply to the bone's manual hitbox
 // data so the hitbox keeps its original world position despite the bind-pose edit.
 bool GetBoneHitboxCompensation(int globalBone, matrix3x4_t &outInvDelta) {
@@ -8637,18 +8714,29 @@ bool GetBoneHitboxCompensation(int globalBone, matrix3x4_t &outInvDelta) {
     return true;
 }
 
-// For an animation flagged ignorebonemove/ignorebonerotate, temporarily rewrite
-// the affected bones' srcRealign to exclude the ignored category of edits, so the
+// Returns true if any applied edit is flagged 'ignoreanimation' (rolled back for
+// every animation regardless of per-animation flags).
+static bool HasGlobalIgnoreAnimEdit() {
+    for (int e = 0; e < g_appliedBoneEdits.Count(); e++)
+        if (g_appliedBoneEdits[e].ignoreAnim)
+            return true;
+    return false;
+}
+
+// For an animation flagged 'ignoretransformbindpose angles|position' - or whenever
+// an edit carries the global 'ignoreanimation' keyword - temporarily rewrite the
+// affected bones' srcRealign to exclude the ignored category of edits, so the
 // animation converts as if those edits never happened. Saves the displaced values
 // into 'saved' for PopAnimSrcRealignOverride to restore. Returns true if anything
-// was overridden. A no-op (returns false) when the animation carries no flags or
-// no edits were applied - keeping behavior byte-identical in the common case.
+// was overridden. A no-op (returns false) when the animation carries no flags, no
+// edit is globally ignored, or no edits were applied - keeping behavior
+// byte-identical in the common case.
 static bool PushAnimSrcRealignOverride(const s_animation_t *panim, CUtlVector<s_srcrealignsave_t> &saved) {
     saved.RemoveAll();
 
-    if (!panim->ignoreBoneMove && !panim->ignoreBoneRotate)
-        return false;
     if (g_appliedBoneEdits.Count() == 0)
+        return false;
+    if (!panim->ignoreTransformPosition && !panim->ignoreTransformAngles && !HasGlobalIgnoreAnimEdit())
         return false;
 
     for (int b = 0; b < g_StudioMdlContext.numbones && b < MAXSTUDIOBONES; b++) {
@@ -8662,9 +8750,16 @@ static bool PushAnimSrcRealignOverride(const s_animation_t *panim, CUtlVector<s_
             const s_appliededit_t &ae = g_appliedBoneEdits[e];
             if (ae.bone != b)
                 continue;
-            if (ae.kind == BONEXFORM_MOVE && panim->ignoreBoneMove)
+            // transformverts edits were never folded into srcRealign, so they are
+            // not part of the animation path - never replay them here
+            if (ae.transformVerts)
                 continue;
-            if (ae.kind == BONEXFORM_ROTATE && panim->ignoreBoneRotate)
+            // 'ignoreanimation': excluded from every animation
+            if (ae.ignoreAnim)
+                continue;
+            if (ae.kind == BONEXFORM_MOVE && panim->ignoreTransformPosition)
+                continue;
+            if (ae.kind == BONEXFORM_ROTATE && panim->ignoreTransformAngles)
                 continue;
             matrix3x4_t tmp;
             ConcatTransforms(M, ae.D, tmp);
@@ -8688,10 +8783,10 @@ static void PopAnimSrcRealignOverride(const CUtlVector<s_srcrealignsave_t> &save
     }
 }
 
-// Re-skin step for $movebone ... moveweight <residualbone> <factor>. The bind-pose
-// edit itself is weight-preserving (it only relocates srcRealign/boneToPose,
+// Re-skin step for $transformbindposebone ... transformweights <residualbone> <factor>.
+// The bind-pose edit itself is weight-preserving (it only relocates srcRealign/boneToPose,
 // leaving the rest mesh and animations visually identical), so it never drops any
-// weight. moveweight is the explicit ask to hand the moved bone's influence to a
+// weight. transformweights is the explicit ask to hand the moved bone's influence to a
 // residual bone: for every vertex weighted to the moved (target) bone, transfer
 // <factor> of that weight onto the residual bone (1 = full, 0 = none) and
 // renormalize. The rest position was already baked from the original weights in
@@ -8861,13 +8956,14 @@ void SimplifyModel() {
 
     LinkIKLocks();
 
+    // apply $transformbindposebone bind-pose edits first, before $realignbones, so
+    // a realign is computed on the edited skeleton (and so the $definebones dump
+    // below reflects the edits)
+    ApplyBoneTransformEdits();
+
     RealignBones();
 
     ConvertBoneTreeCollapsesToReplaceBones();
-
-    // apply $rotatebone / $movebone bind-pose edits before the $definebones
-    // dump so an exported skeleton reflects the edits
-    ApplyBoneTransformEdits();
 
     // export bones
     if (g_definebones) {
@@ -8934,10 +9030,9 @@ void SimplifyModel() {
 
     TagWorldAlignedBones();
 
-    // generate $aligneyes / $alignmouth attachments before linking so they flow
+    // generate $attachmentbyverts attachments before linking so they flow
     // through the normal absolute-attachment world->bone-local conversion
-    GenerateAlignEyesAttachments();
-    GenerateAlignMouthAttachments();
+    GenerateAttachmentByVertsAttachments();
 
     // link attachments
     LinkAttachments();
