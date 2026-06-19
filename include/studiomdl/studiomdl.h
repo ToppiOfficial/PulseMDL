@@ -65,12 +65,6 @@ class CDmeCombinationOperator;
 #define MAXSTUDIOEVENTS            1024
 #define MAXSTUDIOFLEXKEYS        (MAXSTUDIOFLEXDESC / 2)    // always half of MAXSTUDIOFLEXDESC
 #define MAXSTUDIOFLEXRULES        4096
-
-// Hard cap on the number of bone constraints (point / orient / aim / parent,
-// i.e. g_constraintBones) used as the $modelbudget "boneconstraints" ceiling.
-// Jigglebones, twist bones and aimat bones are separate procedural-bone types
-// and are not counted. This is only a runtime soft-check ceiling -- it does NOT
-// size any array.
 #define MAXSTUDIOBONECONSTRAINTS  256
 
 //-----------------------------------------------------------------------------
@@ -83,7 +77,7 @@ class CDmeCombinationOperator;
 //   totalverts        MAXSTUDIOVERTS            MAXSTUDIOVERTS
 //   bodyverts         MAXSTUDIOVERTS / 2        MAXSTUDIOVERTS / 3
 //   bones             MAXSTUDIOBONES (1024)     256
-//   materials         MAXSTUDIOSKINS (128)      32
+//   materials         MAXSTUDIOSKINS (128)      64
 //   flexcontroller    MAXSTUDIOFLEXCTRL (256)   96
 //   flexmorph         MAXSTUDIOFLEXDESC (4096)  1024   (also bounds flexkeys = /2)
 //   flexmorphverts    MAXSTUDIOFLEXVERTS(65536) 32768
@@ -2041,7 +2035,7 @@ struct StudioMdlContext {
     int maxVertexLimit        = MAXSTUDIOVERTS / 3;      // bodyverts limit  [MAXSTUDIOVERTS/2]
     int maxVertexClamp        = MAXSTUDIOVERTS / 3;      // bodyverts clamp  [MAXSTUDIOVERTS/2]
     int maxBoneLimit          = 256;                     // [MAXSTUDIOBONES = 1024]
-    int budgetMaterials       = 32;                      // [MAXSTUDIOSKINS = 128]
+    int budgetMaterials       = 64;                      // [MAXSTUDIOSKINS = 128]
     int budgetFlexControllers = 96;                      // [MAXSTUDIOFLEXCTRL = 256]
     int budgetFlexMorph       = 1024;                    // [MAXSTUDIOFLEXDESC = 4096] (also bounds flexkeys = /2)
     int budgetFlexMorphVerts  = 32768;                   // [MAXSTUDIOFLEXVERTS = 65536]
