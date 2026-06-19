@@ -9,8 +9,6 @@ Cannot be combined with `$staticprop`.
 
 ## Syntax
 
-Block form (recommended):
-
 ```
 $staticproppose {
     pose <file> <frame>
@@ -18,12 +16,6 @@ $staticproppose {
     flex <name> [<value>]
     ...
 }
-```
-
-Inline form (legacy, no flex support):
-
-```
-$staticproppose <file> <frame>
 ```
 
 ## Subcommands
@@ -70,12 +62,6 @@ $staticproppose {
 }
 ```
 
-Legacy inline form (pose only, no flex):
-
-```
-$staticproppose "animations/my_pose.smd" 30
-```
-
 ## Notes
 
 - `$staticproppose` must appear after all `$body` / `$bodygroup` / `$model` lines since
@@ -83,6 +69,16 @@ $staticproppose "animations/my_pose.smd" 30
 
 - The pose source does not need to be referenced by any `$sequence` or `$animation`.
   It is loaded only to sample bone transforms for the bake.
+
+- Because the pose source is used only for its bone transforms, any special DME
+  elements it carries - jigglebones and bone constraints (twist / point / orient /
+  aim / parent) - are ignored and do not contribute to the compiled model.
+
+- The skeleton is collapsed into a single `static_prop` bone, so special DME elements
+  that depend on the original bones are stripped: hitboxes, jigglebones, and any
+  attachments that came from the source DMX/SMD (e.g. weapon-bone slots). Attachments
+  you define in the QC - including `$attachmentbyverts` and the `placementOrigin` from
+  `$autocenter` - are kept. (Plain `$staticprop` keeps its attachments unchanged.)
 
 - `$nosequence` can be used together with `$staticproppose`. A dummy BindPose sequence
   is injected automatically so no `$sequence` line is needed.

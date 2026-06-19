@@ -744,6 +744,8 @@ void AddBodyAttachments( s_source_t *pSource )
         }
 
         memcpy( &g_attachment[g_numattachments], &( pSource->m_Attachments[i] ), sizeof( s_attachment_t ) );
+        // mark as source-derived so $staticproppose can strip it on skeleton collapse
+        g_attachment[g_numattachments].type |= IS_FROM_SOURCE;
         ++g_numattachments;
     }
 }
@@ -763,6 +765,8 @@ void AddBodyAttachments(s_source_t *pSource) {
         }
 
         memcpy(&g_attachment[g_numattachments], &(pSource->m_Attachments[i]), sizeof(s_attachment_t));
+        // mark as source-derived so $staticproppose can strip it on skeleton collapse
+        g_attachment[g_numattachments].type |= IS_FROM_SOURCE;
         ++g_numattachments;
     }
 }
@@ -4748,51 +4752,46 @@ void Cmd_StaticPropPose() {
 
     GetToken(false);
 
-    if (token[0] == '{') {
-        // block form: $staticproppose { pose <file> <frame>  flex <name> [<value>] ... }
-        while (GetToken(true)) {
-            if (token[0] == '}')
-                break;
+    if (token[0] != '{') {
+        MdlError("$staticproppose: expected block form '$staticproppose { pose <file> <frame> ... }'\n");
+        return;
+    }
 
-            if (!Q_stricmp(token, "pose")) {
-                GetToken(false);
-                s_source_t *pSource = Load_Source(token, "", false, false);
-                if (!pSource) {
-                    MdlError("$staticproppose: failed to load pose source '%s'\n", token);
-                    return;
-                }
-                GetToken(false);
-                g_pStaticPropPoseSource = pSource;
-                g_nStaticPropPoseFrame = atoi(token);
-            } else if (!Q_stricmp(token, "flex")) {
-                s_staticPropPoseFlexOverride_t ov;
-                GetToken(false);
-                Q_strncpy(ov.name, token, sizeof(ov.name));
-                ov.value = 1.0f;
-                if (TokenAvailable()) {
-                    GetToken(false);
-                    ov.value = (float) verify_atof(token);
-                }
-                g_staticPropPoseFlexOverrides.AddToTail(ov);
-            } else {
-                MdlWarning("$staticproppose: unknown token '%s', ignoring\n", token);
+    // block form: $staticproppose { pose <file> <frame>  flex <name> [<value>] ... }
+    while (GetToken(true)) {
+        if (token[0] == '}')
+            break;
+
+        if (!Q_stricmp(token, "pose")) {
+            GetToken(false);
+            g_bLoadingStaticPropPose = true;
+            s_source_t *pSource = Load_Source(token, "", false, false);
+            g_bLoadingStaticPropPose = false;
+            if (!pSource) {
+                MdlError("$staticproppose: failed to load pose source '%s'\n", token);
+                return;
             }
+            GetToken(false);
+            g_pStaticPropPoseSource = pSource;
+            g_nStaticPropPoseFrame = atoi(token);
+        } else if (!Q_stricmp(token, "flex")) {
+            s_staticPropPoseFlexOverride_t ov;
+            GetToken(false);
+            Q_strncpy(ov.name, token, sizeof(ov.name));
+            ov.value = 1.0f;
+            if (TokenAvailable()) {
+                GetToken(false);
+                ov.value = (float) verify_atof(token);
+            }
+            g_staticPropPoseFlexOverrides.AddToTail(ov);
+        } else {
+            MdlWarning("$staticproppose: unknown token '%s', ignoring\n", token);
         }
+    }
 
-        if (!g_pStaticPropPoseSource) {
-            MdlError("$staticproppose: block form requires a 'pose' line\n");
-            return;
-        }
-    } else {
-        // inline form: $staticproppose <file> <frame>
-        s_source_t *pSource = Load_Source(token, "", false, false);
-        if (!pSource) {
-            MdlError("$staticproppose: failed to load pose source '%s'\n", token);
-            return;
-        }
-        GetToken(false);
-        g_pStaticPropPoseSource = pSource;
-        g_nStaticPropPoseFrame = atoi(token);
+    if (!g_pStaticPropPoseSource) {
+        MdlError("$staticproppose: block form requires a 'pose' line\n");
+        return;
     }
 
     ProcessStaticProp();

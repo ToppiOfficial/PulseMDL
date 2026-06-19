@@ -1000,7 +1000,7 @@ static void HandleDmeJiggleBone(const CDmeDag *pDmeDag) {
     const char *pName = pDmeJiggleBone->GetName();
     for (int i = 0; i < g_numjigglebones; ++i) {
         if (!Q_stricmp(pName, g_jigglebones[i].bonename)) {
-            MdlWarning("2000: Jiggle Bone: %s already defined, ignoring additional declarations\n", pName);
+            //MdlWarning("2000: Jiggle Bone: %s already defined, ignoring additional declarations\n", pName);
             return;
         }
     }
@@ -1129,7 +1129,10 @@ AddDagJoint(CDmeModel *pModel, CDmeDag *pDag, std::array<s_node_t,MAXSTUDIOSRCBO
         }
     }
 
-    HandleDmeJiggleBone(pDag);
+    // Skip jigglebones when loading a $staticproppose pose source; it contributes
+    // bone transforms only and must not leak jigglebones into the model.
+    if (!g_bLoadingStaticPropPose)
+        HandleDmeJiggleBone(pDag);
 
     Q_strncpy(pNodes[nJointIndex].name, pDag->GetName(), sizeof(pNodes[nJointIndex].name));
     pNodes[nJointIndex].parent = nParentIndex;
@@ -4724,8 +4727,10 @@ int Load_DMX(s_source_t *pSource) {
     // Load model info
     LoadModelInfo(pRoot, pFullPath);
 
-    // Load constraints
-    LoadConstraints(pRoot);
+    // Load constraints. Skip for a $staticproppose pose source, which supplies bone
+    // transforms only and must not leak twist bones / constraints into the model.
+    if (!g_bLoadingStaticPropPose)
+        LoadConstraints(pRoot);
 
     // Extract out the skeleton
     // BoneRemap[bone index in file] == bone index in studiomdl

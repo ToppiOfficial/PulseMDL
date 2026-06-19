@@ -3527,8 +3527,12 @@ static void ApplyStaticPropPose() {
             }
 
             if (poseIdx == -1) {
-                MdlWarning("$staticproppose: bone '%s' not in pose source, using bind pose\n",
-                    psource->localBone[k].name);
+                // Expected: a pose source typically covers only a subset of bones. Only
+                // spew this per-bone when not running quiet.
+                if (!g_StudioMdlContext.quiet) {
+                    MdlWarning("$staticproppose: bone '%s' not in pose source, using bind pose\n",
+                        psource->localBone[k].name);
+                }
                 SetIdentityMatrix(skinMat[k]);
                 continue;
             }
@@ -3731,6 +3735,38 @@ void MakeStaticProp() {
     // throw away all vertex animations
     g_numflexkeys = 0;
     g_defaultflexkey = NULL;
+
+    // $staticproppose collapses the skeleton into a single "static_prop" bone, so any
+    // special DME elements keyed to the original bones are meaningless and would
+    // otherwise fail later bone lookups (e.g. SetupHitBoxes() aborts with
+    // "cannot find bone ... for bbox"). Strip the source-derived ones. Plain
+    // $staticprop is left untouched.
+    if (g_pStaticPropPoseSource) {
+        g_StudioMdlContext.hitboxsets.clear();
+        g_numjigglebones = 0;
+        g_numflexcontrollers = 0;
+        g_numflexrules = 0;
+        g_numflexdesc = 0;
+        g_StudioMdlContext.hDmeBoneFlexDriverList = DMELEMENT_HANDLE_INVALID;
+        for (int m = 0; m < g_nummodels; m++) {
+            if (g_model[m])
+                g_model[m]->numeyeballs = 0;
+        }
+        g_nummouths = 0;
+
+        // Drop attachments that came from a source DMX/SMD (e.g. weapon-bone slots),
+        // keeping QC-defined ones (e.g. $attachmentbyverts, $autocenter's placementOrigin).
+        // Compact the array in place.
+        int nKept = 0;
+        for (i = 0; i < g_numattachments; i++) {
+            if (g_attachment[i].type & IS_FROM_SOURCE)
+                continue;
+            if (nKept != i)
+                g_attachment[nKept] = g_attachment[i];
+            nKept++;
+        }
+        g_numattachments = nKept;
+    }
 
     // Recalc attachment points:
     for (i = 0; i < g_numattachments; i++) {
@@ -5335,9 +5371,10 @@ void RemoveDuplicateAttachments() {
             if (Q_strcmp(iAtt.name, jAtt.name))
                 continue;    // Not the same name
 
+            // ignore the compile-only IS_FROM_SOURCE marker when comparing
             if (Q_stricmp(iAtt.bonename, jAtt.bonename) ||
                 iAtt.bone != jAtt.bone ||
-                iAtt.type != jAtt.type ||
+                (iAtt.type & ~IS_FROM_SOURCE) != (jAtt.type & ~IS_FROM_SOURCE) ||
                 iAtt.flags != jAtt.flags ||
                 Q_memcmp(iAtt.local.Base(), jAtt.local.Base(), sizeof(matrix3x4_t))) {
                 RadianEuler iEuler, jEuler;

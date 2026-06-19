@@ -412,6 +412,9 @@ struct s_attachment_t {
 
 #define IS_ABSOLUTE        0x0001
 #define IS_RIGID        0x0002
+// compile-only marker (never written to the .mdl): attachment came from a source DMX/SMD
+// rather than an explicit QC command. $staticproppose strips these on skeleton collapse.
+#define IS_FROM_SOURCE     0x0004
 
 EXTERN std::array<s_attachment_t, MAXSTUDIOSRCBONES> g_attachment;
 EXTERN int g_numattachments;
@@ -1116,6 +1119,10 @@ EXTERN s_source_t *g_source[MAXSTUDIOSEQUENCES];
 
 EXTERN s_source_t *g_pStaticPropPoseSource;
 EXTERN int g_nStaticPropPoseFrame;
+
+// true only while Load_Source() is loading a $staticproppose pose file; suppresses
+// non-geometry side effects (jigglebones, constraints) that would otherwise leak into the model
+EXTERN bool g_bLoadingStaticPropPose;
 
 struct s_staticPropPoseFlexOverride_t {
     char name[MAXSTUDIONAME];
