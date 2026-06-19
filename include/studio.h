@@ -188,6 +188,7 @@ private:
 #define JIGGLE_HAS_ANGLE_CONSTRAINT		0x10
 #define JIGGLE_HAS_LENGTH_CONSTRAINT	0x20
 #define JIGGLE_HAS_BASE_SPRING			0x40
+#define JIGGLE_IS_BOING					0x80		// simple squash and stretch sinusoid boing
 
 struct mstudiojigglebone_t
 {
@@ -234,6 +235,13 @@ struct mstudiojigglebone_t
 	float			baseMinForward;
 	float			baseMaxForward;
 	float			baseForwardFriction;
+
+	// boing
+	float			boingImpactSpeed;
+	float			boingImpactAngle;
+	float			boingDampingRate;
+	float			boingFrequency;
+	float			boingAmplitude;
 
 private:
 	// No copy constructors allowed

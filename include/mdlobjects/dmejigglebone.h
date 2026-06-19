@@ -35,6 +35,7 @@ public:
 	CDmaVar< bool >		m_bPitchConstrained;
 	CDmaVar< bool >		m_bLengthConstrained;
 	CDmaVar< bool >		m_bAngleConstrained;
+	CDmaVar< bool >		m_bBoing;
 
 	// general params
 	CDmaVar< float >	m_flLength;	
@@ -84,6 +85,13 @@ public:
 	CDmaVar< float >	m_flBaseAlongMin;
 	CDmaVar< float >	m_flBaseAlongMax;
 	CDmaVar< float >	m_flBaseAlongFriction;
+
+	// boing
+	CDmaVar< float >	m_flBoingImpactSpeed;
+	CDmaVar< float >	m_flBoingImpactAngle;	// Angle (degrees)
+	CDmaVar< float >	m_flBoingDampingRate;
+	CDmaVar< float >	m_flBoingFrequency;
+	CDmaVar< float >	m_flBoingAmplitude;
 
 };
 

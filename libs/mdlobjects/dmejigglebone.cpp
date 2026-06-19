@@ -33,6 +33,7 @@ void CDmeJiggleBone::OnConstruction()
 	m_bPitchConstrained.InitAndSet( this, "pitchConstrained", false );
 	m_bLengthConstrained.InitAndSet( this, "lengthConstrained", false );
 	m_bAngleConstrained.InitAndSet( this, "angleConstrained", false );
+	m_bBoing.InitAndSet( this, "boing", false );
 
 	// general params
 	m_flLength.InitAndSet( this, "length", 10.0f );
@@ -82,6 +83,13 @@ void CDmeJiggleBone::OnConstruction()
 	m_flBaseAlongMin.Init( this, "baseAlongMin", -100.0f );
 	m_flBaseAlongMax.Init( this, "baseAlongMax", 100.0f );
 	m_flBaseAlongFriction.Init( this, "baseAlongFriction" );
+
+	// boing (impact angle stored in degrees, converted to a cosine threshold at compile time)
+	m_flBoingImpactSpeed.InitAndSet( this, "boingImpactSpeed", 100.0f );
+	m_flBoingImpactAngle.InitAndSet( this, "boingImpactAngle", 45.0f );
+	m_flBoingDampingRate.InitAndSet( this, "boingDampingRate", 0.25f );
+	m_flBoingFrequency.InitAndSet( this, "boingFrequency", 30.0f );
+	m_flBoingAmplitude.InitAndSet( this, "boingAmplitude", 0.35f );
 }
 
 

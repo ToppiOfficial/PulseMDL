@@ -4466,6 +4466,73 @@ bool ParseFlexibleJiggle(s_jigglebone_t *jiggleInfo) {
 }
 
 //
+// Parse parameters for is_boing subsection
+//
+bool ParseBoingJiggle(s_jigglebone_t *jiggleInfo) {
+    jiggleInfo->data.flags |= JIGGLE_IS_BOING;
+
+    // default values
+    jiggleInfo->data.boingImpactSpeed = 100.0f;
+    jiggleInfo->data.boingImpactAngle = 0.7071f;
+    jiggleInfo->data.boingDampingRate = 0.25f;
+    jiggleInfo->data.boingFrequency = 30.0f;
+    jiggleInfo->data.boingAmplitude = 0.35f;
+
+    bool gotOpenBracket = false;
+    while (true) {
+        if (GetToken(true) == false) {
+            MdlError("$jigglebone:is_boing: parse error\n", g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+            return false;
+        }
+
+        if (!stricmp(token, "{")) {
+            gotOpenBracket = true;
+        } else if (!gotOpenBracket) {
+            MdlError("$jigglebone:is_boing: missing '{'\n", g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+            return false;
+        } else if (!stricmp(token, "}")) {
+            // definition complete
+            break;
+        } else if (!stricmp(token, "impact_speed")) {
+            if (!GetToken(false)) {
+                return false;
+            }
+
+            jiggleInfo->data.boingImpactSpeed = verify_atof(token);
+        } else if (!stricmp(token, "impact_angle")) {
+            if (!GetToken(false)) {
+                return false;
+            }
+
+            jiggleInfo->data.boingImpactAngle = cosf(verify_atof(token) * M_PI / 180.0f);
+        } else if (!stricmp(token, "damping_rate")) {
+            if (!GetToken(false)) {
+                return false;
+            }
+
+            jiggleInfo->data.boingDampingRate = verify_atof(token);
+        } else if (!stricmp(token, "frequency")) {
+            if (!GetToken(false)) {
+                return false;
+            }
+
+            jiggleInfo->data.boingFrequency = verify_atof(token);
+        } else if (!stricmp(token, "amplitude")) {
+            if (!GetToken(false)) {
+                return false;
+            }
+
+            jiggleInfo->data.boingAmplitude = verify_atof(token);
+        } else {
+            MdlError("$jigglebone:is_boing: invalid syntax '%s'\n", token);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+//
 // Parse $jigglebone parameters
 //
 void Cmd_JiggleBone() {
@@ -4530,6 +4597,10 @@ void Cmd_JiggleBone() {
             }
         } else if (!stricmp(token, "has_base_spring")) {
             if (ParseBaseSpringJiggle(jiggleInfo) == false) {
+                return;
+            }
+        } else if (!stricmp(token, "is_boing")) {
+            if (ParseBoingJiggle(jiggleInfo) == false) {
                 return;
             }
         } else {

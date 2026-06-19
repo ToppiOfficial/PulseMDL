@@ -1083,6 +1083,15 @@ static void HandleDmeJiggleBone(const CDmeDag *pDmeDag) {
         pJiggleBone->data.baseMaxForward = pDmeJiggleBone->m_flBaseAlongMax;
         pJiggleBone->data.baseForwardFriction = pDmeJiggleBone->m_flBaseAlongFriction;
     }
+
+    if (pDmeJiggleBone->m_bBoing) {
+        pJiggleBone->data.flags |= JIGGLE_IS_BOING;
+        pJiggleBone->data.boingImpactSpeed = pDmeJiggleBone->m_flBoingImpactSpeed;
+        pJiggleBone->data.boingImpactAngle = cosf(DEG2RAD(pDmeJiggleBone->m_flBoingImpactAngle.Get()));
+        pJiggleBone->data.boingDampingRate = pDmeJiggleBone->m_flBoingDampingRate;
+        pJiggleBone->data.boingFrequency = pDmeJiggleBone->m_flBoingFrequency;
+        pJiggleBone->data.boingAmplitude = pDmeJiggleBone->m_flBoingAmplitude;
+    }
 }
 
 
