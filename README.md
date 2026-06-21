@@ -2,7 +2,7 @@
 
 > **Experimental**
 
-A modified standalone fork of Valve's StudioMDL compiler, focused on advanced character modding workflows (facial flexes, procedural bones, bodygroup variants, proportion rigs) while remaining fully compatible with general studiomdl use cases. Based on [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2).
+A modified standalone fork of Valve's StudioMDL compiler, focused on advanced character modding workflows (facial flexes, procedural bones, bodygroup variants, proportion rigs). Based on [REDxEYE/studiomdl_v2](https://github.com/REDxEYE/studiomdl_v2).
 
 Primarily tested with `DMX model 18`. Older versions may still work.
 
