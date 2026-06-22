@@ -235,7 +235,9 @@ namespace OptimizedModel {
 
     struct Mesh_t {
         CUtlVector<StripGroup_t> stripGroups;
-        unsigned int flags;
+        // Default to 0 so meshes culled at a LOD (which skip ComputeMeshFlags via the
+        // MeshNeedsRemoval continue in BuildModelLODs) never carry garbage flag bytes.
+        unsigned int flags = 0; // wtf?
     };
 
     struct ModelLOD_t {
@@ -3899,6 +3901,15 @@ namespace OptimizedModel {
         char filename[MAX_PATH];
         char tmpFileName[MAX_PATH];
         char glViewFilename[MAX_PATH];
+
+        if (!g_StudioMdlContext.quiet) {
+            // Report which VTX strip layout is being written. SFM reads the
+            // Alien Swarm/CS:GO 35-byte strips and crashes on the legacy ones,
+            // so make the active format obvious at compile time.
+            printf("VTX format: %s\n", g_bLegacyVTX
+                       ? "0 - TF2/L4D2/GMod/HL2 (legacy 27-byte strips)"
+                       : "1 - Alien Swarm/CS:GO/SFM (35-byte strips)");
+        }
 
         ValidateLODReplacements(phdr);
 
