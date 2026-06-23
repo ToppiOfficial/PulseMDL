@@ -27,6 +27,9 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 > **Collision compile accuracy may vary.** The standalone `$collisionmodel` and `$collisionjoints` pipeline (which no longer requires vphysics.dll) is built from a combination of open-source references and reverse engineering. References used: [VPhysics-Jolt](https://github.com/misyltoad/VPhysics-Jolt), [Gmod-vphysics](https://github.com/DrChat/Gmod-vphysics), and [Valve Developer Wiki - VPhysics](https://developer.valvesoftware.com/wiki/VPhysics). Its output may not be fully consistent with what official Valve studiomdl produces. If you encounter incorrect physics shapes, unexpected behavior, or compilation differences, please report them as issues.
 
 > [!WARNING]
+> **Vertex Animations** Vertex Animation is only supported for -vtxformat 1 (alien swarm engine branch and above) but there are likely unwanted vertex animation elements being compiled with -vtxformat 0, thus don't implement vertex animation on your model for games such as TF2,HL2, and L4D2
+
+> [!WARNING]
 > **Capsule Hitbox from CS:GO (legacy)** The capsule hitbox from CSGO is still being compiled along with traditional box hitbox.  I've tested box hitbox in L4D2 and Garry's Mod and it seems to still work properly even with capsule data of "0 0 0 -1" in the model.  TODO: A launch parameter to completely compile without capsule data?
 
 
