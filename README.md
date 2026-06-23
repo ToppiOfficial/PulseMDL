@@ -6,6 +6,14 @@ A modified standalone fork of Valve's StudioMDL compiler, focused on advanced ch
 
 Primarily tested with `DMX model 18`. Older versions may still work.
 
+## TODO
+
+- Further remove some compile limit even if compiling above said limit will crash the game (add a warning?)
+- Check and possibly fix vertex animations
+- Implement eyeball, eyelid for DMX.
+- Completely re-design the mesh split.
+- Refine the printing output
+
 ## Tested Source Engine Branch
  
 | Game | Test Result |
