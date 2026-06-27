@@ -1167,6 +1167,112 @@ static void CaptureDmeFlexRules(s_source_t *pSource, CDmrElementArray<CDmElement
 }
 
 //-----------------------------------------------------------------------------
+// Returns true if any DmeFlexRuleExpression in the targets references %<pszName>
+// (a flex-variable fetch). Used to flag unused localvars and expression flexes
+// that the compiler had to auto-declare because no localvar of that name exists.
+//-----------------------------------------------------------------------------
+static bool AnyFlexRuleReferencesPercentName(CDmrElementArray<CDmElement> &targets, const char *pszName) {
+    for (int i = 0; i < targets.Count(); ++i) {
+        CDmeFlexRules *pDmeFlexRules = CastElement<CDmeFlexRules>(targets[i]);
+        if (!pDmeFlexRules)
+            continue;
+        for (int j = 0; j < pDmeFlexRules->GetRuleCount(); ++j) {
+            CDmeFlexRuleExpression *pExpr = CastElement<CDmeFlexRuleExpression>(pDmeFlexRules->GetRule(j));
+            if (!pExpr)
+                continue;
+            const char *p = pExpr->GetExpression();
+            while (p && *p) {
+                if (*p++ != '%')
+                    continue;
+                const char *pStart = p;
+                while (*p && (V_isalnum((unsigned char)*p) || *p == '_'))
+                    p++;
+                if (p == pStart)
+                    continue;
+                char szName[MAX_PATH];
+                int nLen = min((int)(p - pStart), (int)sizeof(szName) - 1);
+                V_strncpy(szName, pStart, nLen + 1);
+                if (stricmp(szName, pszName) == 0)
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+//-----------------------------------------------------------------------------
+// Returns true if a DmeFlexRuleLocalVar named pszName exists in the targets.
+//-----------------------------------------------------------------------------
+static bool HasLocalVarNamed(CDmrElementArray<CDmElement> &targets, const char *pszName) {
+    for (int i = 0; i < targets.Count(); ++i) {
+        CDmeFlexRules *pDmeFlexRules = CastElement<CDmeFlexRules>(targets[i]);
+        if (!pDmeFlexRules)
+            continue;
+        for (int j = 0; j < pDmeFlexRules->GetRuleCount(); ++j) {
+            CDmeFlexRuleBase *pRule = pDmeFlexRules->GetRule(j);
+            if (CastElement<CDmeFlexRuleLocalVar>(pRule) && stricmp(pRule->GetName(), pszName) == 0)
+                return true;
+        }
+    }
+    return false;
+}
+
+//-----------------------------------------------------------------------------
+// Dedup guard: the same DMX combination is re-processed once per LOD source and
+// per $body/$model that references it, so warn only once per (source file, name).
+//-----------------------------------------------------------------------------
+static bool FlexRuleDeclWarnOnce(const char *pszSourceFile, const char *pszName) {
+    static CUtlVector<CUtlString> s_warned;
+    CUtlString key = pszSourceFile;
+    key += "|";
+    key += pszName;
+    for (int i = 0; i < s_warned.Count(); ++i) {
+        if (stricmp(s_warned[i].Get(), key.Get()) == 0)
+            return false;    // already warned for this source/name
+    }
+    s_warned.AddToTail(key);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Diagnoses two flex-rule naming mistakes (both keyed off %name references):
+//   1. A localvar that no expression ever references (%name) - dead weight,
+//      emitted as an undriven flex (e.g. a misspelled 'ud_norm').
+//   2. An expression flex that IS referenced as a variable (%name) but has no
+//      matching localvar - the compiler auto-declared the flexdesc from the
+//      expression's own name instead of the user declaring a localvar ahead of
+//      it (e.g. 'udnorm' standing in for the intended 'ud_norm' localvar).
+//-----------------------------------------------------------------------------
+static void WarnFlexRuleDeclarations(s_source_t *pSource, CDmrElementArray<CDmElement> &targets) {
+    for (int i = 0; i < targets.Count(); ++i) {
+        CDmeFlexRules *pDmeFlexRules = CastElement<CDmeFlexRules>(targets[i]);
+        if (!pDmeFlexRules)
+            continue;
+        for (int j = 0; j < pDmeFlexRules->GetRuleCount(); ++j) {
+            CDmeFlexRuleBase *pRule = pDmeFlexRules->GetRule(j);
+            if (!pRule)
+                continue;
+            const char *pszName = pRule->GetName();
+
+            if (CastElement<CDmeFlexRuleLocalVar>(pRule)) {
+                if (!AnyFlexRuleReferencesPercentName(targets, pszName) &&
+                    FlexRuleDeclWarnOnce(pSource->filename, pszName)) {
+                    MdlWarning("DMX flex rule: unused localvar '%s' (never referenced as %%%s)\n",
+                               pszName, pszName);
+                }
+            } else if (CastElement<CDmeFlexRuleExpression>(pRule)) {
+                if (AnyFlexRuleReferencesPercentName(targets, pszName) &&
+                    !HasLocalVarNamed(targets, pszName) &&
+                    FlexRuleDeclWarnOnce(pSource->filename, pszName)) {
+                    MdlWarning("DMX flex rule: '%s' used as %%%s but auto-declared (no matching localvar)\n",
+                               pszName, pszName);
+                }
+            }
+        }
+    }
+}
+
+//-----------------------------------------------------------------------------
 // Adds combination data to the source
 //-----------------------------------------------------------------------------
 void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) {
@@ -1185,6 +1291,10 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
         // path (PostProcessSource), but the DMX flex rules themselves are captured here
         // so the (possibly filtered) clone can replay them. Without this, expression flex
         // rules were silently dropped from every $rendermesh clone.
+        
+        // Diagnose naming mistakes here too - facial $rendermesh DMX never reaches the
+        // normal path below, so the warnings would otherwise never fire for it.
+        WarnFlexRuleDeclarations(pSource, targets);
         CaptureDmeFlexRules(pSource, targets);
         BuildCombinationSourceData(pSource, pCombination);
         return;
@@ -1305,6 +1415,10 @@ void AddCombination(s_source_t *pSource, CDmeCombinationOperator *pCombination) 
                 }
             }
         }
+
+        // Flag localvar/expression naming mistakes (unused localvars, and expression
+        // flexes the compiler had to auto-declare because no matching localvar exists).
+        WarnFlexRuleDeclarations(pSource, targets);
 
         for (int i = 0; i < targets.Count(); ++i) {
             CDmeFlexRules *pDmeFlexRules = CastElement<CDmeFlexRules>(targets[i]);
