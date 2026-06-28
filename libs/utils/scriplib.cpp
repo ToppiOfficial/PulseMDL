@@ -1335,6 +1335,9 @@ void AttemptConditionalInclude( void )
 	// try fallback include dirs in registration order (unless nofallbackdir)
 	if ( !bNoFallbackDir )
 	{
+		// basename of the requested path (filename + extension, no directories)
+		const char* szBaseName = V_UnqualifiedFileName( szSavedPath );
+
 		for (int nDir = 0; nDir < g_includeDirs.Count(); nDir++)
 		{
 			char szCandidate[MAX_PATH];
@@ -1348,6 +1351,24 @@ void AttemptConditionalInclude( void )
 				printf("Including: %s (from fallback dir: %s)\n", szSavedPath, g_includeDirs[nDir].String());
 				AddScriptToStack(szCandidate);
 				return;
+			}
+
+			// drop the relative hierarchy: <dir>/<basename>
+			// (only meaningful when the requested path actually had subdirectories)
+			if ( szBaseName && szBaseName[0] && Q_strcmp(szBaseName, szSavedPath) != 0 )
+			{
+				char szFlatCandidate[MAX_PATH];
+				V_snprintf(szFlatCandidate, sizeof(szFlatCandidate), "%s/%s", g_includeDirs[nDir].String(), szBaseName);
+				Q_FixSlashes(szFlatCandidate);
+				const char* szFlatExpanded = ExpandPath(szFlatCandidate);
+				FILE* ff = fopen(szFlatExpanded, "r");
+				if (ff)
+				{
+					fclose(ff);
+					printf("Including: %s (from fallback dir: %s, flattened)\n", szSavedPath, g_includeDirs[nDir].String());
+					AddScriptToStack(szFlatCandidate);
+					return;
+				}
 			}
 		}
 	}
