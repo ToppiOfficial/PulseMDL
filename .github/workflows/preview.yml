@@ -62,4 +62,3 @@ jobs:
           body: "Rolling preview build from commit ${{ github.sha }}. This release is overwritten on every preview run; do not rely on this link for stable downloads."
           files: |
             pulsemdl-preview-win64.zip
-            out/build/x64-release/pulsemdl.exe
