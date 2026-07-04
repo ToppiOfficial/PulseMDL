@@ -4855,7 +4855,7 @@ static void LoadDmxHitboxes( const CDmeHitboxSetList *pDmeHitboxSetList )
             s_bbox_t *pHitbox = &pHitboxSet->hitbox[ pHitboxSet->numhitboxes++ ];
 
             Q_strncpy( pHitbox->name, pSrcHitbox->m_sBoneName, sizeof( pHitbox->name ) );
-            Q_strncpy( pHitbox->hitboxname, pSrcHitbox->GetName(), sizeof( pHitbox->hitboxname ) );
+            //Q_strncpy( pHitbox->hitboxname, pSrcHitbox->GetName(), sizeof( pHitbox->hitboxname ) );
             pHitbox->group = pSrcHitbox->m_nGroupId;
             // Match Cmd_Hitbox's scale_vertex() so DMX hitboxes respect $scale.
             pHitbox->bmin = pSrcHitbox->m_vMinBounds.Get() * g_currentscale;

@@ -2929,7 +2929,7 @@ void Cmd_Hitbox() {
         GetToken(false);
         set->hitbox[set->numhitboxes].flCapsuleRadius = verify_atof(token);
     } else {
-        set->hitbox[set->numhitboxes].flCapsuleRadius = -1;
+        set->hitbox[set->numhitboxes].flCapsuleRadius = 0;
     }
 
     //Scale hitboxes
