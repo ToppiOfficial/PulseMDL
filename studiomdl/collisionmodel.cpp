@@ -1666,6 +1666,11 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 	if ( !GetToken( false ) ) { MdlWarning( "%s: expected <rendermesh>\n", pCmd ); return false; }
 	V_strncpy( req.rendermesh, token, sizeof(req.rendermesh) );
 
+	// Mark the render mesh as used now, at parse time.  Actual resolution happens later
+	// in ProcessGenerateRequests(), after ReportUnusedRenderMeshDefs() has already run,
+	// so without this the mesh would be falsely reported as defined-but-never-used.
+	MarkRenderMeshUsed( req.rendermesh );
+
 	// Optional keyword/value pairs.  Stop at the next token that is not one of our
 	// keywords (it belongs to the enclosing block) and put it back.
 	while ( TokenAvailable() )

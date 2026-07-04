@@ -1816,11 +1816,99 @@ static byte *WriteAnimations(byte *pData, byte *pStart, studiohdr_t *phdr) {
 }
 
 
+extern int FindMaterialByName(const char *pMaterialName);
+
+// Unused-material cull: materials whose faces were all removed before write
+// ($rendermesh mesh filters / removematerial, collision-only sources, unfiltered
+// cached originals) would otherwise still be encoded into the .mdl texture table.
+// Materials referenced only through the skin table ($texturegroup / DMX material
+// groups) or by $lod replacematerial are kept even with zero faces.
+// s_finalMaterialMap translates a parse-time material index into its written
+// texture-table row, -1 if culled; identity until CullUnusedMaterials() runs.
+static int s_finalMaterialMap[MAXSTUDIOSKINS];
+static int s_numPreCullMaterials = 0;
+
+static int RemapMaterialIndex(int material) {
+    if (material < 0 || material >= s_numPreCullMaterials)
+        return material;
+    return s_finalMaterialMap[material];
+}
+
+static void CullUnusedMaterials() {
+    bool used[MAXSTUDIOSKINS];
+    memset(used, 0, sizeof(used));
+
+    auto MarkUsed = [&used](int material) {
+        if (material >= 0 && material < MAXSTUDIOSKINS)
+            used[material] = true;
+    };
+
+    // every mesh that can be written references its material through meshindex[]
+    for (int i = 0; i < g_nummodels; i++) {
+        if (!g_model[i])
+            continue;
+        s_source_t *psource = g_model[i]->source;
+        if (psource) {
+            for (int m = 0; m < psource->nummeshes; m++)
+                MarkUsed(psource->meshindex[m]);
+        }
+        for (int lod = 0; lod < g_model[i]->m_LodSources.Count(); lod++) {
+            s_source_t *pLodSource = g_model[i]->m_LodSources[lod];
+            if (!pLodSource)
+                continue;
+            for (int m = 0; m < pLodSource->nummeshes; m++)
+                MarkUsed(pLodSource->meshindex[m]);
+        }
+    }
+
+    // $texturegroup / DMX material group replacements are only reachable through
+    // the skin table, so they never own faces; keep every entry
+    for (int g = 0; g < g_numtexturegroups; g++) {
+        for (int layer = 0; layer < g_numtexturelayers[g]; layer++) {
+            for (int rep = 0; rep < g_numtexturereps[g]; rep++)
+                MarkUsed(g_texturegroup[g][layer][rep]);
+        }
+    }
+
+    // $lod replacematerial sources are referenced by ID from the VTX replacement list
+    for (int i = 0; i < g_ScriptLODs.Count(); i++) {
+        for (int j = 0; j < g_ScriptLODs[i].materialReplacements.Count(); j++) {
+            int nTexture = FindMaterialByName(g_ScriptLODs[i].materialReplacements[j].GetSrcName());
+            if (nTexture >= 0)
+                MarkUsed(g_texture[nTexture].material);
+        }
+    }
+
+    // Commit: compact g_material[] and rewrite g_texture[].material so that
+    // MaterialToTexture() keeps working against the written mesh material indices.
+    s_numPreCullMaterials = g_nummaterials;
+    int newCount = 0;
+    for (int i = 0; i < g_nummaterials; i++) {
+        if (!used[i]) {
+            s_finalMaterialMap[i] = -1;
+            g_texture[g_material[i]].material = -1;
+            if (!g_StudioMdlContext.quiet)
+                printf("Culling unused material \"%s\"\n", g_texture[g_material[i]].name);
+            continue;
+        }
+        s_finalMaterialMap[i] = newCount;
+        g_material[newCount] = g_material[i];
+        g_texture[g_material[i]].material = newCount;
+        newCount++;
+    }
+
+    int numCulled = s_numPreCullMaterials - newCount;
+    g_nummaterials = newCount;
+
+    if (!g_StudioMdlContext.quiet && numCulled > 0)
+        printf("Culled %d unused material(s).\n", numCulled);
+}
+
 static void WriteTextures(studiohdr_t *phdr) {
     int i, j;
     short *pref;
 
-    // save texture info
+    // save texture info (g_material[] is already compacted by CullUnusedMaterials)
     mstudiotexture_t *ptexture = (mstudiotexture_t *) pData;
     phdr->numtextures = g_nummaterials;
     phdr->textureindex = pData - pStart;
@@ -1841,14 +1929,26 @@ static void WriteTextures(studiohdr_t *phdr) {
     ALIGN4(pData);
 
     // save texture directory info
+    // skinref columns and values are parse-time material indices; drop the
+    // columns of culled materials and remap what remains
     phdr->skinindex = (pData - pStart);
-    phdr->numskinref = g_numskinref;
     phdr->numskinfamilies = g_numskinfamilies;
     pref = (short *) pData;
 
+    int numskinref = 0;
+    for (j = 0; j < g_numskinref; j++) {
+        if (RemapMaterialIndex(j) >= 0)
+            numskinref++;
+    }
+    phdr->numskinref = numskinref;
+
     for (i = 0; i < phdr->numskinfamilies; i++) {
-        for (j = 0; j < phdr->numskinref; j++) {
-            *pref = g_skinref[i][j];
+        for (j = 0; j < g_numskinref; j++) {
+            int nColumn = RemapMaterialIndex(j);
+            if (nColumn < 0)
+                continue;
+            int nValue = RemapMaterialIndex(g_skinref[i][j]);
+            *pref = (short) (nValue >= 0 ? nValue : nColumn);
             pref++;
         }
     }
@@ -2027,7 +2127,7 @@ static void WriteVertices(studiohdr_t *phdr) {
     int i;
     int j;
     int k;
-    int cur;
+    uintptr_t cur; // full pointer width - an int truncates on 64-bit and garbles the byte report
     bool bExtraData = (phdr->flags & STUDIOHDR_FLAGS_EXTRA_VERTEX_DATA) != 0;
 
     if (!g_nummodelsbeforeLOD)
@@ -2123,7 +2223,7 @@ static void WriteVertices(studiohdr_t *phdr) {
         fileHeader->numLODVertexes[0] += pLodData->numvertices;
 
         if (!g_StudioMdlContext.quiet) {
-            printf("vertices   %7llu bytes (%d vertices)\n", (uintptr_t) (pData - cur), pLodData->numvertices);
+            printf("vertices   %7llu bytes (%d vertices)\n", ((uintptr_t) pData - cur), pLodData->numvertices);
         }
     }
 
@@ -2151,7 +2251,7 @@ static void WriteVertices(studiohdr_t *phdr) {
         }
 
         if (!g_StudioMdlContext.quiet) {
-            printf("tangents   %7llu bytes (%d vertices)\n", (uintptr_t) (pData - cur), pLodData->numvertices);
+            printf("tangents   %7llu bytes (%d vertices)\n", ((uintptr_t) pData - cur), pLodData->numvertices);
         }
     }
 
@@ -2197,7 +2297,7 @@ static void WriteVertices(studiohdr_t *phdr) {
                 pData = (byte *) pExtraTexcoord;
 
                 if (!g_StudioMdlContext.quiet) {
-                    printf("extra vertex data   %7llu bytes (%d vertices)\n", (uintptr_t) (pData - cur),
+                    printf("extra vertex data   %7llu bytes (%d vertices)\n", ((uintptr_t) pData - cur),
                            pLodData->numvertices);
                 }
             }
@@ -2307,7 +2407,7 @@ static void WriteModel(studiohdr_t *phdr) {
     mstudiovertanim_t *pvertanim;
     s_vertanim_t *pvanim;
 
-    int cur = (uintptr_t) pData;
+    uintptr_t cur = (uintptr_t) pData; // full pointer width - an int truncates on 64-bit and garbles the byte report
 
     // vertex data is written to external file, offsets kept internal
     // track expected external base to store proper offsets
@@ -2591,7 +2691,7 @@ static void WriteModel(studiohdr_t *phdr) {
     }
 
     if (!g_StudioMdlContext.quiet) {
-        printf("ik/pose    %7llu bytes\n", (uintptr_t) (pData - cur));
+        printf("ik/pose    %7llu bytes\n", ((uintptr_t) pData - cur));
     }
     cur = (uintptr_t) pData;
 
@@ -2659,7 +2759,7 @@ static void WriteModel(studiohdr_t *phdr) {
         for (m = 0; m < pmodel[i].nummeshes; m++) {
             n = psource->meshindex[m];
 
-            pmesh[m].material = n;
+            pmesh[m].material = RemapMaterialIndex(n);
             pmesh[m].modelindex = (byte *) &pmodel[i] - (byte *) &pmesh[m];
             pmesh[m].numvertices = pLodData->mesh[n].numvertices;
             pmesh[m].vertexoffset = pLodData->mesh[n].vertexoffset;
@@ -2710,7 +2810,7 @@ static void WriteModel(studiohdr_t *phdr) {
         }
 
         if (!g_StudioMdlContext.quiet) {
-            printf("eyeballs   %7llu bytes (%d eyeballs)\n", (uintptr_t) (pData - cur), g_model[i]->numeyeballs);
+            printf("eyeballs   %7llu bytes (%d eyeballs)\n", ((uintptr_t) pData - cur), g_model[i]->numeyeballs);
         }
 
         // move flexes into individual meshes
@@ -2809,7 +2909,7 @@ static void WriteModel(studiohdr_t *phdr) {
         }
 
         if (!g_StudioMdlContext.quiet) {
-            printf("flexes     %7llu bytes (%d flexes)\n", (uintptr_t) (pData - cur), g_numflexkeys);
+            printf("flexes     %7llu bytes (%d flexes)\n", ((uintptr_t) pData - cur), g_numflexkeys);
         }
         cur = (uintptr_t) pData;
     }
@@ -3021,6 +3121,9 @@ void WriteModelFiles() {
     studiohdr_t *phdr;
     studiohdr_t *pblockhdr = 0;
     int nBlockBufferSize = 0;
+
+    // drop materials no written mesh references before any table is emitted
+    CullUnusedMaterials();
 
     // Animation data dominates the .mdl payload; everything else is bounded
     // by counts. Estimate generously and floor at FILEBUFFER (see FileBufferSize).

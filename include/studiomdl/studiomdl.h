@@ -106,6 +106,7 @@ class CDmeCombinationOperator;
 #define MAX_RENDERMESH_DEFS             512     // total $rendermesh definitions
 #define MAX_RENDERMESH_OVERRIDES        256     // per-def mesh overrides
 #define MAX_RENDERMESH_MATERIAL_REMOVES 256     // per-def material removals
+#define MAX_RENDERMESH_FLEXCTRL_REMOVES 256     // per-def flex controller removals
 // Conditional ($if/$switch) stacking limits live in scriplib.h (libs/utils),
 // since that parsing lives below the studiomdl layer.
 
@@ -153,6 +154,7 @@ EXTERN    bool g_bboxonlyverts;
 
 EXTERN    int clip_texcoords;
 EXTERN    bool g_staticprop;
+EXTERN    bool g_simpleprop;
 EXTERN    bool g_centerstaticprop;
 EXTERN    bool g_nosequence;
 EXTERN    bool g_bLegacyVTX;
@@ -1153,6 +1155,14 @@ EXTERN bool g_bLoadingStaticPropPose;
 // is a faithful copy of all the DMX's flex data (nofacial drops them again like everything else).
 EXTERN bool g_bLoadingRenderMeshRaw;
 
+// true only while loading the underlying source of a $rendermesh that requested
+// "nojigglebones" / "nohitbox" / "noproceduralbones". They suppress the DMX jigglebone /
+// hitbox / procedural-bone parsing so that render-mesh clone contributes none of the
+// source's jigglebones / hitboxes / procedural (driverbone/driverlookat) bones.
+EXTERN bool g_bRenderMeshSuppressJiggleBones;
+EXTERN bool g_bRenderMeshSuppressHitboxes;
+EXTERN bool g_bRenderMeshSuppressProceduralBones;
+
 struct s_staticPropPoseFlexOverride_t {
     char name[MAXSTUDIONAME];
     float value;
@@ -1668,6 +1678,10 @@ s_source_t *Load_Source(const char *filename, const char *ext, bool reverse = fa
 // Returns a shared owned source (do not free); NULL if no such $rendermesh exists.
 s_source_t *GetRenderMeshSource(const char *name);
 
+// Mark a $rendermesh definition as used (without loading it), so deferred consumers
+// like $generate/$generatejoint don't trip the "defined but never used" warning.
+void MarkRenderMeshUsed(const char *name);
+
 void ApplyOffsetToSrcVerts(s_source_t *pModel, matrix3x4_t matOffset);
 
 void AddSrcToSrc(s_source_t *pOrigSource, s_source_t *pAppendSource, matrix3x4_t matOffset);
@@ -2039,6 +2053,7 @@ struct StudioMdlContext {
     unsigned cullAnims: 1;
     unsigned cullMorphs: 1;
     unsigned bNoAutoDMXRulesGlobal: 1;  // $noautodmxrulesglobal: suppress auto DMX flex on every source
+    unsigned bNoProceduralBonesGlobal: 1;  // $noproceduralbones: strip all axisinterp/quatinterp/aimat procedural bones
     int g_maxWarnings = -1;
     char g_path[1024];
 
@@ -2067,6 +2082,8 @@ struct StudioMdlContext {
     CUtlVectorAuto<Vector2D> texcoord[MAXSTUDIOTEXCOORDS];
 
     std::vector<s_hitboxset> hitboxsets;
+    bool bForceHitboxSet;                              // $forcehboxset was specified
+    char forceHitboxSetName[MAXSTUDIOHITBOXSETNAME];   // the name it forces
     std::vector<char> KeyValueText;
     std::vector<s_flexcontrollerremap_t> FlexControllerRemap;
     std::vector<CUtlSymbol> CreateMakefileDependencies;
@@ -2137,6 +2154,7 @@ struct StudioMdlContext {
               modelIntentionallyHasZeroSequences(0),
               bContentRootRelative(0),
               bNoAutoDMXRulesGlobal(0),
+              bNoProceduralBonesGlobal(0),
               minLod(0),
               numAllowedRootLODs(0),
               bHasModelName(0),

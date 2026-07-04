@@ -2705,7 +2705,9 @@ namespace OptimizedModel {
             for (j = 0; j < scriptLOD.materialReplacements.Count(); j++) {
                 CLodScriptReplacement_t &materialReplacement = scriptLOD.materialReplacements[j];
                 MaterialReplacementHeader_t tmpHeader;
-                tmpHeader.materialID = FindMaterialByName(materialReplacement.GetSrcName());
+                
+                int nTexture = FindMaterialByName(materialReplacement.GetSrcName());
+                tmpHeader.materialID = (nTexture >= 0) ? g_texture[nTexture].material : -1;
                 tmpHeader.replacementMaterialNameOffset = m_StringTableOffset +
                                                           s_StringTable.StringTableOffset(
                                                                   materialReplacement.GetDstName()) - offset;

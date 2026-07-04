@@ -1,4 +1,4 @@
-//====== Copyright © 1996-2004, Valve Corporation, All rights reserved. =======
+//====== Copyright ï¿½ 1996-2004, Valve Corporation, All rights reserved. =======
 //
 // Purpose: See notes below
 //
@@ -86,6 +86,8 @@ USING_ELEMENT_FACTORY( DmeBoneFlexDriverControl );
 USING_ELEMENT_FACTORY( DmeBoneFlexDriver );
 USING_ELEMENT_FACTORY( DmeBoneFlexDriverList );
 USING_ELEMENT_FACTORY( DmeProceduralBone );
+USING_ELEMENT_FACTORY( DmeQuatInterpBone );
+USING_ELEMENT_FACTORY( DmeAimAtBone );
 USING_ELEMENT_FACTORY( DmeJiggleBone );
 USING_ELEMENT_FACTORY( DmeMatSysPanelSettings );
 USING_ELEMENT_FACTORY( DmeMatSysRoot );

@@ -186,9 +186,6 @@ void processAnimations() {
                     break;
                 case CMD_SUBTRACT:
                     panim->flags |= STUDIO_DELTA;
-                    if (pcmd->u.subtract.ref && pcmd->u.subtract.ref->ignorescale != panim->ignorescale)
-                        MdlWarning("animation \"%s\" subtract ref \"%s\" has mismatched ignorescale: scale mismatch likely\n",
-                                   panim->name, pcmd->u.subtract.ref->name);
                     subtractBaseAnimations(pcmd->u.subtract.ref, panim, pcmd->u.subtract.frame, pcmd->u.subtract.flags);
                     break;
                 case CMD_AO: {
@@ -199,17 +196,11 @@ void processAnimations() {
                             MdlError("unable to find bone %s to alignbone\n", pcmd->u.ao.pBonename);
                         }
                     }
-                    if (pcmd->u.ao.ref && pcmd->u.ao.ref->ignorescale != panim->ignorescale)
-                        MdlWarning("animation \"%s\" AO ref \"%s\" has mismatched ignorescale: scale mismatch likely\n",
-                                   panim->name, pcmd->u.ao.ref->name);
                     processAutoorigin(pcmd->u.ao.ref, panim, pcmd->u.ao.motiontype, pcmd->u.ao.srcframe,
                                       pcmd->u.ao.destframe, bone);
                 }
                     break;
                 case CMD_MATCH:
-                    if (pcmd->u.match.ref && pcmd->u.match.ref->ignorescale != panim->ignorescale)
-                        MdlWarning("animation \"%s\" match ref \"%s\" has mismatched ignorescale: scale mismatch likely\n",
-                                   panim->name, pcmd->u.match.ref->name);
                     processMatch(pcmd->u.match.ref, panim, false);
                     break;
                 case CMD_FIXUP:
@@ -3284,21 +3275,26 @@ bool BoneHasAttachments(char const *pname) {
 bool BoneIsProcedural(char const *pname) {
     int k;
 
-    for (k = 0; k < g_numaxisinterpbones; k++) {
-        if (!stricmp(g_axisinterpbones[k].bonename, pname)) {
-            return true;
+    // $noproceduralbones strips axisinterp/quatinterp/aimat bones, so they impose
+    // no collapse constraint - the model should collapse as if they never existed.
+    // Jigglebones/twistbones below are a separate type and stay protected.
+    if (!g_StudioMdlContext.bNoProceduralBonesGlobal) {
+        for (k = 0; k < g_numaxisinterpbones; k++) {
+            if (!stricmp(g_axisinterpbones[k].bonename, pname)) {
+                return true;
+            }
         }
-    }
 
-    for (k = 0; k < g_numquatinterpbones; k++) {
-        if (IsGlobalBoneXSI(g_quatinterpbones[k].bonename, pname)) {
-            return true;
+        for (k = 0; k < g_numquatinterpbones; k++) {
+            if (IsGlobalBoneXSI(g_quatinterpbones[k].bonename, pname)) {
+                return true;
+            }
         }
-    }
 
-    for (k = 0; k < g_numaimatbones; k++) {
-        if (IsGlobalBoneXSI(g_aimatbones[k].bonename, pname)) {
-            return true;
+        for (k = 0; k < g_numaimatbones; k++) {
+            if (IsGlobalBoneXSI(g_aimatbones[k].bonename, pname)) {
+                return true;
+            }
         }
     }
 
@@ -3357,12 +3353,66 @@ static bool BoneIsFlexDriver(char const *pname) {
 
 // Returns true if this bone is the control/input for an axisinterp or quatinterp procedural bone.
 static bool BoneIsProceduralControl(char const *pname) {
+    if (g_StudioMdlContext.bNoProceduralBonesGlobal)
+        return false; // $noproceduralbones: these bones are stripped, no collapse constraint
     for (int k = 0; k < g_numaxisinterpbones; k++) {
         if (!stricmp(g_axisinterpbones[k].controlname, pname))
             return true;
     }
     for (int k = 0; k < g_numquatinterpbones; k++) {
         if (!stricmp(g_quatinterpbones[k].controlname, pname))
+            return true;
+    }
+    return false;
+}
+
+// Returns true if pname (a global bonetable name) is the current hierarchy parent
+// of the named global bone.
+static bool BoneIsParentOfGlobalBone(char const *pname, char const *childname) {
+    int child = findGlobalBoneXSI(childname);
+    if (child == -1)
+        return false;
+    int parent = g_bonetable[child].parent;
+    return (parent != -1 && !stricmp(g_bonetable[parent].name, pname));
+}
+
+// Returns true if this bone is a parent/aim dependency of a procedural bone:
+// quatinterp parent / control parent, aimat parent / aim target.
+static bool BoneIsProceduralParent(char const *pname) {
+    if (g_StudioMdlContext.bNoProceduralBonesGlobal)
+        return false; // $noproceduralbones: these bones are stripped, no collapse constraint
+    for (int k = 0; k < g_numaxisinterpbones; k++) {
+        if (findGlobalBone(g_axisinterpbones[k].bonename) == -1)
+            continue; // procedural bone optimized out; parents needn't be kept
+        if (BoneIsParentOfGlobalBone(pname, g_axisinterpbones[k].bonename))
+            return true;
+        if (BoneIsParentOfGlobalBone(pname, g_axisinterpbones[k].controlname))
+            return true;
+    }
+    for (int k = 0; k < g_numquatinterpbones; k++) {
+        s_quatinterpbone_t *pInterp = &g_quatinterpbones[k];
+        if (findGlobalBoneXSI(pInterp->bonename) == -1)
+            continue;
+        // explicit parents (.vrd <helper>); empty for $driverbone / DMX (auto-resolved)
+        if (pInterp->parentname[0] && IsGlobalBoneXSI(pInterp->parentname, pname))
+            return true;
+        if (pInterp->controlparentname[0] && IsGlobalBoneXSI(pInterp->controlparentname, pname))
+            return true;
+        if (BoneIsParentOfGlobalBone(pname, pInterp->bonename))
+            return true;
+        if (BoneIsParentOfGlobalBone(pname, pInterp->controlname))
+            return true;
+    }
+    for (int k = 0; k < g_numaimatbones; k++) {
+        s_aimatbone_t *pAimAt = &g_aimatbones[k];
+        if (findGlobalBoneXSI(pAimAt->bonename) == -1)
+            continue;
+        if (pAimAt->parentname[0] && IsGlobalBoneXSI(pAimAt->parentname, pname))
+            return true;
+        if (BoneIsParentOfGlobalBone(pname, pAimAt->bonename))
+            return true;
+        // aim target may be a bone (attachment targets are kept via BoneHasAttachments)
+        if (IsGlobalBoneXSI(pAimAt->aimname, pname))
             return true;
     }
     return false;
@@ -3383,6 +3433,7 @@ bool BoneShouldCollapse(char const *pname) {
     }
 
     return (!BoneHasAnimation(pname) && !BoneIsProcedural(pname) && !BoneIsProceduralControl(pname)
+            && !BoneIsProceduralParent(pname)
             && !BoneIsIK(pname) && !BoneHasAttachments(pname) && !BoneIsBonemerge(pname)
             && !BoneIsFlexDriver(pname));
 }
@@ -3783,6 +3834,95 @@ void MakeStaticProp() {
 
 
 //-----------------------------------------------------------------------------
+// Purpose: Collapse the entire skeleton into a single center bone named
+//          "prop_root", producing a one-bone *dynamic* model that can still
+//          carry physics collision ($collisionmodel/$collisionjoints), which is
+//          the point of a "simple" prop.
+//
+//          Unlike MakeStaticProp(), this does NOT set the static-prop flag and -
+//          critically - does NOT bake geometry into model space or reset the root
+//          bone to identity. The vertices stay in their source space and the root
+//          bone keeps its normal bind-pose transform, exactly like an ordinary
+//          one-bone model. That is what keeps the render mesh aligned with the
+//          $generate collision: ProcessGenerateRequests() runs *after*
+//          SimplifyModel() and re-derives collision from these same source-space
+//          vertices (applying the source->model rotation itself). If we baked the
+//          vertices here, that rotation would be applied twice and the collision
+//          would be visibly rotated off the render mesh.
+//
+//          If the source's root bone is already named "prop_root" that name is
+//          reused; otherwise the root bone is renamed to "prop_root". Everything
+//          keyed to the original skeleton (flex, jigglebones, eyeballs, mouths,
+//          bone flex drivers) is stripped, and attachments/hitboxes are remapped
+//          onto the single bone so exactly "prop_root" survives the collapse.
+//-----------------------------------------------------------------------------
+void MakeSimpleProp() {
+    int i, j, k;
+
+    // Collapse each source's skeleton onto its root bone.
+    for (i = 0; i < g_numsources; i++) {
+        s_source_t *psource = g_source[i];
+        if (psource->numbones <= 0)
+            continue;
+
+        // Reuse an existing "prop_root" name; otherwise rename the root bone.
+        if (Q_stricmp(psource->localBone[0].name, "prop_root") != 0)
+            strcpy(psource->localBone[0].name, "prop_root");
+
+        // Orphan every bone so only the root survives the collapse.
+        for (k = 0; k < psource->numbones; k++)
+            psource->localBone[k].parent = -1;
+
+        // Re-skin every vertex fully onto the root bone. Vertices stay in their
+        // source space; in the bind pose any bone reproduces a vertex's position,
+        // so re-weighting to the root keeps the geometry exactly in place while
+        // making the model rigidly follow "prop_root".
+        for (j = 0; j < psource->numvertices; j++) {
+            s_boneweight_t &bw = psource->vertex[j].boneweight;
+            bw.numbones = 1;
+            bw.bone[0] = 0;
+            bw.weight[0] = 1.0f;
+        }
+    }
+
+    // throw away all vertex animations - a single rigid bone has no flex.
+    g_numflexkeys = 0;
+    g_defaultflexkey = NULL;
+
+    // Anything keyed to the original bones is meaningless on a single bone and
+    // would otherwise keep extra bones alive during the collapse. Strip the
+    // source-derived special elements (same set as the $staticproppose path).
+    g_numjigglebones = 0;
+    g_numflexcontrollers = 0;
+    g_numflexrules = 0;
+    g_numflexdesc = 0;
+    g_StudioMdlContext.hDmeBoneFlexDriverList = DMELEMENT_HANDLE_INVALID;
+    for (int m = 0; m < g_nummodels; m++) {
+        if (g_model[m])
+            g_model[m]->numeyeballs = 0;
+    }
+    g_nummouths = 0;
+
+    // Remap hitboxes onto the single bone so a physics prop keeps its hit groups.
+    for (size_t s = 0; s < g_StudioMdlContext.hitboxsets.size(); s++) {
+        s_hitboxset &set = g_StudioMdlContext.hitboxsets[s];
+        for (k = 0; k < set.numhitboxes; k++) {
+            Q_strncpy(set.hitbox[k].name, "prop_root", sizeof(set.hitbox[k].name));
+            set.hitbox[k].bone = 0;
+        }
+    }
+
+    // Remap attachments onto the single bone. Geometry is not baked, so the local
+    // transforms are left as-is (attachments authored on the root stay correct;
+    // ones authored on a now-collapsed child keep their local offset).
+    for (i = 0; i < g_numattachments; i++) {
+        Q_strncpy(g_attachment[i].bonename, "prop_root", sizeof(g_attachment[i].name));
+        g_attachment[i].bone = 0;
+    }
+}
+
+
+//-----------------------------------------------------------------------------
 // Marks the boneref all the way up the bone hierarchy
 //-----------------------------------------------------------------------------
 static void UpdateBonerefRecursive(s_source_t *psource, int nBoneIndex, int nFlags) {
@@ -4043,6 +4183,24 @@ void TagUsedBones() {
                     continue;
 
                 psource->boneflags[j] |= BONE_USED_BY_BONE_MERGE;
+            }
+        }
+
+        // Tag force-kept bones so they survive the unused-bone cull in
+        // BuildGlobalBonetable(); $donotcollapse/$nocollapsebones only guard
+        // CollapseBones(), which never sees bones dropped there.
+        for (k = 0; k < g_DoNotCollapse.Count(); k++) {
+            for (j = 0; j < psource->numbones; j++) {
+                if (stricmp(g_DoNotCollapse[k], psource->localBone[j].name))
+                    continue;
+
+                psource->boneflags[j] |= BONE_USED_BY_ATTACHMENT;
+            }
+        }
+
+        if (g_StudioMdlContext.no_collapse_bones && psource->isActiveModel) {
+            for (j = 0; j < psource->numbones; j++) {
+                psource->boneflags[j] |= BONE_USED_BY_ATTACHMENT;
             }
         }
 
@@ -4484,6 +4642,16 @@ static void TagConstraintBones() {
 
 void TagProceduralBones() {
     int j;
+
+    // $noproceduralbones: compile with no procedural (axisinterp / quatinterp /
+    // aimat) bones. Drop everything parsed - from QC or a source DMX, before or
+    // after the command - so none flow through to the write stage. Jigglebones are
+    // a separate type and are left untouched.
+    if (g_StudioMdlContext.bNoProceduralBonesGlobal) {
+        g_numaxisinterpbones = 0;
+        g_numquatinterpbones = 0;
+        g_numaimatbones = 0;
+    }
 
     // look for AxisInterp bone definitions
     int numaxisinterpbones = 0;
@@ -5414,6 +5582,8 @@ void RemapBones() {
 
     if (g_staticprop) {
         MakeStaticProp();
+    } else if (g_simpleprop) {
+        MakeSimpleProp();
     } else if (g_centerstaticprop) {
         MdlWarning("Ignoring option $autocenter.  Only supported on $staticprop models!!!\n");
     }
@@ -8181,12 +8351,25 @@ void SetupHitBoxes() {
         }
     }
 
+    // $forcehboxset: overrule the name of a lone hitbox set. Does nothing when
+    // multiple sets exist; when no set exists, the name is handed to the
+    // auto-generated default set below.
+    if (g_StudioMdlContext.bForceHitboxSet) {
+        if (g_StudioMdlContext.hitboxsets.size() == 1) {
+            strcpyn(g_StudioMdlContext.hitboxsets[0].hitboxsetname, g_StudioMdlContext.forceHitboxSetName);
+        } else if (g_StudioMdlContext.hitboxsets.size() > 1) {
+            MdlWarning("$forcehboxset \"%s\" ignored: model has %d hitbox sets (only applies with a single set)\n",
+                       g_StudioMdlContext.forceHitboxSetName, (int)g_StudioMdlContext.hitboxsets.size());
+        }
+    }
+
     if (g_StudioMdlContext.hitboxsets.size() == 0) {
         g_StudioMdlContext.hitboxsets.emplace_back();
 
         s_hitboxset *set = &g_StudioMdlContext.hitboxsets.back();
         memset(set, 0, sizeof(*set));
-        strcpy(set->hitboxsetname, "default");
+        strcpy(set->hitboxsetname,
+               g_StudioMdlContext.bForceHitboxSet ? g_StudioMdlContext.forceHitboxSetName : "default");
 
         gflags |= STUDIOHDR_FLAGS_AUTOGENERATED_HITBOX;
 

@@ -24,6 +24,7 @@
 #include "mdlobjects/dmeeyeball.h"
 #include "mdlobjects/dmeeyelid.h"
 #include "mdlobjects/dmejigglebone.h"
+#include "mdlobjects/dmeproceduralbone.h"
 #include "mdlobjects/dmemouth.h"
 #include "mdlobjects/dmehitbox.h"
 #include "mdlobjects/dmehitboxset.h"
@@ -1105,6 +1106,144 @@ static void HandleDmeJiggleBone(const CDmeDag *pDmeDag) {
 
 
 //-----------------------------------------------------------------------------
+// Handles DmeQuatInterpBones (QUATINTERP procedural bones authored in the DMX).
+// The DAG node itself becomes the helper joint; here we register the QUATINTERP
+// description into g_quatinterpbones[] so it flows through TagProceduralBones /
+// RemapProceduralBones exactly like the QC $driverbone path. Parent/control-
+// parent names are left empty and auto-resolved from the final skeleton.
+//-----------------------------------------------------------------------------
+static void HandleDmeQuatInterpBone(const CDmeDag *pDmeDag) {
+    const CDmeQuatInterpBone *pDme = CastElementConst<CDmeQuatInterpBone>(pDmeDag);
+    if (!pDme)
+        return;
+
+    const char *pName = pDme->GetName();
+
+    // Skip duplicates (same DMX referenced more than once, etc.)
+    for (int i = 0; i < g_numquatinterpbones; ++i) {
+        if (!Q_stricmp(pName, g_quatinterpbones[i].bonename))
+            return;
+    }
+
+    if (g_numquatinterpbones >= MAXSTUDIOBONES) {
+        MdlWarning("Too many QUATINTERP procedural bones, ignoring \"%s\"\n", pName);
+        return;
+    }
+
+    const char *pControl = pDme->m_sControlBone.Get();
+    if (!pControl || !pControl[0]) {
+        MdlWarning("DmeQuatInterpBone \"%s\" has no controlBone; skipping\n", pName);
+        return;
+    }
+
+    const int nTriggers = pDme->m_TriggerRotations.Count();
+    if (nTriggers <= 0) {
+        MdlWarning("DmeQuatInterpBone \"%s\" has no triggers; skipping\n", pName);
+        return;
+    }
+    if (pDme->m_Tolerances.Count() != nTriggers ||
+        pDme->m_TargetPositions.Count() != nTriggers ||
+        pDme->m_TargetRotations.Count() != nTriggers) {
+        MdlWarning("DmeQuatInterpBone \"%s\" trigger arrays are mismatched "
+                   "(tolerances %d, triggers %d, positions %d, rotations %d); skipping\n",
+                   pName, pDme->m_Tolerances.Count(), nTriggers,
+                   pDme->m_TargetPositions.Count(), pDme->m_TargetRotations.Count());
+        return;
+    }
+
+    int nUse = nTriggers;
+    if (nUse > 32) {
+        MdlWarning("DmeQuatInterpBone \"%s\" has %d triggers; clamping to 32\n", pName, nTriggers);
+        nUse = 32;
+    }
+
+    s_quatinterpbone_t *pBone = &g_quatinterpbones[g_numquatinterpbones++];
+    memset(pBone, 0, sizeof(*pBone));
+
+    Q_strncpy(pBone->bonename, pName, MAXSTUDIONAME);
+    Q_strncpy(pBone->controlname, pControl, MAXSTUDIONAME);
+    // parentname / controlparentname intentionally empty -> resolved in TagProceduralBones
+    pBone->unlockbones = pDme->m_bUnlockBones.Get();
+    pBone->numtriggers = nUse;
+
+    const Vector basePos = pDme->m_vBasePos.Get();
+    for (int t = 0; t < nUse; ++t) {
+        float tolDeg = pDme->m_Tolerances[t];
+        if (tolDeg <= 0.0f) {
+            // write.cpp stores 1/tolerance; guard against a zero/negative radius
+            MdlWarning("DmeQuatInterpBone \"%s\" trigger %d has non-positive tolerance %g; using 1.0\n",
+                       pName, t, tolDeg);
+            tolDeg = 1.0f;
+        }
+        pBone->tolerance[t] = DEG2RAD(tolDeg);
+        pBone->trigger[t] = pDme->m_TriggerRotations[t];
+        pBone->pos[t] = (basePos + pDme->m_TargetPositions[t]) * g_currentscale;
+        pBone->quat[t] = pDme->m_TargetRotations[t];
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+// Handles DmeAimAtBones (AIMATBONE / look-at procedural bones authored in the
+// DMX). Mirrors the QC $driverlookat path into g_aimatbones[]. The aim target
+// name is resolved against attachments first, then bones, in TagProceduralBones.
+//-----------------------------------------------------------------------------
+static void HandleDmeAimAtBone(const CDmeDag *pDmeDag) {
+    const CDmeAimAtBone *pDme = CastElementConst<CDmeAimAtBone>(pDmeDag);
+    if (!pDme)
+        return;
+
+    const char *pName = pDme->GetName();
+
+    for (int i = 0; i < g_numaimatbones; ++i) {
+        if (!Q_stricmp(pName, g_aimatbones[i].bonename))
+            return;
+    }
+
+    if (g_numaimatbones >= MAXSTUDIOBONES) {
+        MdlWarning("Too many AIMATBONE procedural bones, ignoring \"%s\"\n", pName);
+        return;
+    }
+
+    const char *pTarget = pDme->m_sAimTarget.Get();
+    if (!pTarget || !pTarget[0]) {
+        MdlWarning("DmeAimAtBone \"%s\" has no aimTarget; skipping\n", pName);
+        return;
+    }
+
+    s_aimatbone_t *pBone = &g_aimatbones[g_numaimatbones++];
+    memset(pBone, 0, sizeof(*pBone));
+
+    Q_strncpy(pBone->bonename, pName, MAXSTUDIONAME);
+    Q_strncpy(pBone->aimname, pTarget, MAXSTUDIONAME);
+
+    const char *pParent = pDme->m_sParentBone.Get();
+    if (pParent && pParent[0])
+        Q_strncpy(pBone->parentname, pParent, MAXSTUDIONAME);
+    // else leave empty -> parent resolved from skeleton in TagProceduralBones
+
+    Vector aim = pDme->m_vAimVector.Get();
+    Vector up = pDme->m_vUpVector.Get();
+    VectorNormalize(aim);
+    VectorNormalize(up);
+    pBone->aimvector = aim;
+    pBone->upvector = up;
+    pBone->basepos = pDme->m_vBasePos.Get() * g_currentscale;
+    
+	// DMX basePos is the full base position (already the bone rest pos), so do NOT
+    // let simplify.cpp re-add g_bonetable[bone].pos on top of it - that double-counts
+    // the (scaled) rest position.
+    pBone->autobasepos = false;
+
+
+    pBone->aimAttach = -1;
+    pBone->aimBone = -1;
+    pBone->bone = -1;
+    pBone->parent = -1;
+}
+
+
+//-----------------------------------------------------------------------------
 // Loads the skeletal hierarchy from the game model, returns bone count
 //-----------------------------------------------------------------------------
 static bool
@@ -1138,8 +1277,18 @@ AddDagJoint(CDmeModel *pModel, CDmeDag *pDag, std::array<s_node_t,MAXSTUDIOSRCBO
     // Parse jigglebones only for real model-body loads. A DMX used solely as an
     // $animation/$sequence/$collision/$staticproppose source must not leak its
     // jigglebones into the model (they register into the g_jigglebones[] globals).
-    if (LoadingModelBody())
+    // A $rendermesh clone with "nojigglebones" suppresses them too.
+    if (LoadingModelBody() && !g_bRenderMeshSuppressJiggleBones)
         HandleDmeJiggleBone(pDag);
+
+    // Procedural driver/look-at bones authored directly in the DMX skeleton.
+    // Gated to real model-body loads so an $animation/$sequence/$collision
+    // source DMX never leaks procedural rules into the model. A $rendermesh
+    // clone with "noproceduralbones" suppresses them too.
+    if (LoadingModelBody() && !g_bRenderMeshSuppressProceduralBones) {
+        HandleDmeQuatInterpBone(pDag);
+        HandleDmeAimAtBone(pDag);
+    }
 
     Q_strncpy(pNodes[nJointIndex].name, pDag->GetName(), sizeof(pNodes[nJointIndex].name));
     pNodes[nJointIndex].parent = nParentIndex;
@@ -4763,8 +4912,8 @@ int Load_DMX(s_source_t *pSource) {
     // Deal with hitbox sets. Ok to pass NULL for CDmeHitboxSetList.
     // Only load these for actual model bodies ($body/$bodygroup/$model/$rendermesh);
     // a DMX referenced solely as an $animation/$sequence/$collision source must not
-    // contribute model-global hitboxes.
-    if (LoadingModelBody()) {
+    // contribute model-global hitboxes. A $rendermesh clone with "nohitbox" suppresses them too.
+    if (LoadingModelBody() && !g_bRenderMeshSuppressHitboxes) {
         LoadDmxHitboxes(pRoot->GetValueElement<CDmeHitboxSetList>("hitboxSetList"));
     }
 

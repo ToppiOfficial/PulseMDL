@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *PULSE_MDL_VERSION = "0.4.9d";
+static const char *PULSE_MDL_VERSION = "0.5.0";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -928,6 +928,7 @@ bool CStudioMDLApp::ParseArguments() {
     g_gamma = 2.2;
 
     g_staticprop = false;
+    g_simpleprop = false;
     g_centerstaticprop = false;
     g_nosequence = false;
     g_bLegacyVTX = (atoi(CommandLine()->ParmValue("-vtxformat", "0")) == 0);

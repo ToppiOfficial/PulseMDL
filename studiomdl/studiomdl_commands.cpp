@@ -41,7 +41,13 @@ struct s_rendermesh_def_t {
     int numOverrides;
     char removeMaterials[MAX_RENDERMESH_MATERIAL_REMOVES][MAXSTUDIONAME];
     int numRemoveMaterials;
+    char removeFlexControllers[MAX_RENDERMESH_FLEXCTRL_REMOVES][MAXSTUDIONAME];
+    int numRemoveFlexControllers;
     bool noFacial;          // strip all flex controllers, flex rules and deltas from this clone
+    bool noJiggleBones;     // do not parse the source DMX's jigglebones for this clone
+    bool noHitbox;          // do not parse the source DMX's hitbox sets for this clone
+    bool noProceduralBones; // do not parse the source DMX's procedural bones (driverbone/driverlookat) for this clone
+    bool noAttachments;     // strip the clone's DMX attachment dags post-clone (per-source, cache-safe)
     bool used;
     s_source_t *pOwnedSource;
 };
@@ -60,6 +66,7 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig);
 static void RebuildGeometryFromKeepMask(s_source_t *pSource, const CUtlVector<bool> &keepFace);
 static void ApplyDmeMeshFilter(s_source_t *pSource, const CUtlVector<CUtlString> &meshNames, bool isIsolate);
 static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
+static void ApplyRemoveFlexControllerFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
 static void ApplyNoFacialFilter(s_source_t *pSource);
 static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef);
 static void EnsureRenderMeshOwnedSource(s_rendermesh_def_t *pDef, bool reverse);
@@ -1628,6 +1635,22 @@ void Cmd_NoAutoDMXRulesGlobal() {
     g_StudioMdlContext.bNoAutoDMXRulesGlobal = true;
 }
 
+// $noproceduralbones - global switch that compiles the model with no procedural
+// (axisinterp / quatinterp / aimat) bones. It removes any that were already parsed
+// - whether authored in the QC ($driverbone / $driverlookat) or loaded from a
+// source DMX (DmeQuatInterpBone / DmeAimAtBone) - and, because it also sets a
+// forward-acting flag re-checked in TagProceduralBones(), it strips any parsed
+// after this command too, so placement in the QC does not matter. Jigglebones are
+// a separate procedural type and are unaffected (use the $rendermesh "nojigglebones"
+// option or omit them at the source).
+void Cmd_NoProceduralBones() {
+    g_StudioMdlContext.bNoProceduralBonesGlobal = true;
+    // Remove anything already parsed so far.
+    g_numaxisinterpbones = 0;
+    g_numquatinterpbones = 0;
+    g_numaimatbones = 0;
+}
+
 //-----------------------------------------------------------------------------
 // Purpose: throw away all the options for a specific sequence or animation
 //-----------------------------------------------------------------------------
@@ -2932,6 +2955,33 @@ void Cmd_HitboxSet() {
     GetToken(false);
     memset(set, 0, sizeof(*set));
     strcpy(set->hitboxsetname, token);
+}
+
+//-----------------------------------------------------------------------------
+// $forcehboxset <string>
+// Overrules the name of the model's hitbox set when the model ends up with a
+// single hitbox set, no matter what that set was originally named. Does nothing
+// when the model has multiple hitbox sets. When the model has no hitbox set at
+// all, the string becomes the name of the auto-generated default set. The
+// decision is deferred to SetupHitBoxes() so the final set count (QC + DMX
+// sourced) is known.
+//-----------------------------------------------------------------------------
+void Cmd_ForceHitboxSet() {
+    if (!TokenAvailable()) {
+        MdlError("$forcehboxset: expected a hitbox set name (%d) : %s\n",
+                 g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+        return;
+    }
+
+    GetToken(false);
+    if (token[0] == '\0') {
+        MdlError("$forcehboxset: hitbox set name cannot be empty (%d) : %s\n",
+                 g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+        return;
+    }
+
+    g_StudioMdlContext.bForceHitboxSet = true;
+    strcpyn(g_StudioMdlContext.forceHitboxSetName, token);
 }
 
 //-----------------------------------------------------------------------------
@@ -4762,12 +4812,35 @@ void Cmd_StaticProp() {
         MdlError("$staticprop cannot be used together with $staticproppose\n");
         return;
     }
+    if (g_simpleprop) {
+        MdlError("$staticprop cannot be used together with $simpleprop\n");
+        return;
+    }
     ProcessStaticProp();
+}
+
+// Collapse the whole skeleton into a single "prop_root" bone (see MakeSimpleProp()),
+// producing a one-bone dynamic model. Unlike $staticprop it does NOT set the
+// static-prop flag, so the result can still carry physics collision.
+void Cmd_SimpleProp() {
+    if (g_staticprop) {
+        MdlError("$simpleprop cannot be used together with $staticprop\n");
+        return;
+    }
+    if (g_pStaticPropPoseSource) {
+        MdlError("$simpleprop cannot be used together with $staticproppose\n");
+        return;
+    }
+    g_simpleprop = true;
 }
 
 void Cmd_StaticPropPose() {
     if (g_staticprop) {
         MdlError("$staticproppose cannot be used together with $staticprop\n");
+        return;
+    }
+    if (g_simpleprop) {
+        MdlError("$staticproppose cannot be used together with $simpleprop\n");
         return;
     }
 
@@ -7693,11 +7766,21 @@ static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
         int idx = pClone->m_Animations.AddToTail();
         s_sourceanim_t &ca = pClone->m_Animations[idx];
         memcpy(&ca, &origAnim, sizeof(s_sourceanim_t));
+        // The memcpy above aliased every vanim[fr] pointer to pOrig's buffers. For each
+        // frame either allocate an independent copy (so the filter can mutate/free it) or
+        // NULL the alias out - never leave the clone owning a pointer into pOrig. Note the
+        // free below in StripSourceFlexData (nofacial) triggers on vanim[fr] != NULL alone,
+        // so a frame with an allocated-but-empty buffer (vanim != NULL, numvanims == 0) that
+        // kept its alias would be double-freed across two clones of the same source and
+        // corrupt the heap. Only copy when there is actual data; NULL every other frame.
         for (int fr = 0; fr < MAXSTUDIOANIMFRAMES; fr++) {
             if (origAnim.vanim[fr] && origAnim.numvanims[fr] > 0) {
                 int n = origAnim.numvanims[fr];
                 ca.vanim[fr] = (s_vertanim_t *)malloc(n * sizeof(s_vertanim_t));
                 memcpy(ca.vanim[fr], origAnim.vanim[fr], n * sizeof(s_vertanim_t));
+            } else {
+                ca.vanim[fr] = nullptr;
+                ca.numvanims[fr] = 0;
             }
         }
     }
@@ -7987,6 +8070,86 @@ int StripSourceFlexData(s_source_t *pSource) {
     return nFlexKeys;
 }
 
+// $rendermesh removeflexcontroller: drop the named flex controller(s) from this clone while
+// keeping the morph/delta geometry and the rest of the flex rig intact. A flex controller is a
+// remap entry (m_FlexControllerRemaps, one per DMX combination-operator control / DmeControlInput);
+// removing it also drops the combination rules that were driven solely by it, because those rules
+// would otherwise reference a now-unmapped raw control and crash flex-rule generation. The morph
+// deltas the dropped rules pointed at (m_FlexKeys) stay, just undriven, so other controllers still
+// animate their own morphs. DMX expression flex rules (m_DmeFlexRules) are left untouched.
+static void ApplyRemoveFlexControllerFilter(s_source_t *pSource, s_rendermesh_def_t *pDef) {
+    // Collect the raw control names owned by the removed remaps so we can later drop the
+    // combination rules that reference them (a raw control belongs to exactly one remap).
+    CUtlVector<CUtlString> removedRawNames;
+    int nRemovedControllers = 0;
+
+    for (int r = 0; r < pDef->numRemoveFlexControllers; r++) {
+        const char *pName = pDef->removeFlexControllers[r];
+        bool bFound = false;
+
+        for (int i = 0; i < pSource->m_FlexControllerRemaps.Count();) {
+            s_flexcontrollerremap_t &remap = pSource->m_FlexControllerRemaps[i];
+            if (Q_stricmp(remap.m_Name.Get(), pName) != 0) {
+                ++i;
+                continue;
+            }
+
+            for (size_t j = 0; j < remap.m_RawControls.size(); j++)
+                removedRawNames.AddToTail(remap.m_RawControls[j]);
+
+            pSource->m_FlexControllerRemaps.Remove(i);
+            bFound = true;
+            nRemovedControllers++;
+            // keep scanning at the same index in case of duplicate names
+        }
+
+        if (!bFound)
+            MdlWarning("$rendermesh '%s': removeflexcontroller '%s' does not match any flex controller in '%s'\n",
+                       pDef->name, pName, pSource->filename);
+    }
+
+    if (removedRawNames.Count() == 0)
+        return;
+
+    // Map the orphaned raw control names to their indices in m_CombinationControls. Leaving the
+    // (now unreferenced) raw controls in place is harmless - only remaps register flex controllers,
+    // and no surviving rule references these indices once the driverless rules below are dropped.
+    CUtlVector<int> orphanRawIdx;
+    for (int k = 0; k < pSource->m_CombinationControls.Count(); k++) {
+        for (int n = 0; n < removedRawNames.Count(); n++) {
+            if (Q_stricmp(pSource->m_CombinationControls[k].name, removedRawNames[n].Get()) == 0) {
+                orphanRawIdx.AddToTail(k);
+                break;
+            }
+        }
+    }
+
+    auto RuleTouchesOrphan = [&](const s_combinationrule_t &rule) -> bool {
+        for (int c = 0; c < rule.m_Combination.Count(); c++)
+            if (orphanRawIdx.HasElement(rule.m_Combination[c]))
+                return true;
+        for (int d = 0; d < rule.m_Dominators.Count(); d++)
+            for (int e = 0; e < rule.m_Dominators[d].Count(); e++)
+                if (orphanRawIdx.HasElement(rule.m_Dominators[d][e]))
+                    return true;
+        return false;
+    };
+
+    int nRemovedRules = 0;
+    for (int i = 0; i < pSource->m_CombinationRules.Count();) {
+        if (RuleTouchesOrphan(pSource->m_CombinationRules[i])) {
+            pSource->m_CombinationRules.Remove(i);
+            nRemovedRules++;
+        } else {
+            ++i;
+        }
+    }
+
+    Msg("$rendermesh '%s': removeflexcontroller - dropped %d flex controller%s (%d driverless combination rule%s) from '%s'\n",
+        pDef->name, nRemovedControllers, nRemovedControllers == 1 ? "" : "s",
+        nRemovedRules, nRemovedRules == 1 ? "" : "s", pSource->filename);
+}
+
 // $rendermesh nofacial: strip the clone's flex (see StripSourceFlexData) and report it.
 static void ApplyNoFacialFilter(s_source_t *pSource) {
     int nFlexKeys = StripSourceFlexData(pSource);
@@ -8045,9 +8208,24 @@ static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef)
     if (pDef->numRemoveMaterials > 0)
         ApplyMaterialRemoveFilter(pSource, pDef);
 
+    // Drop individual flex controllers (keeps morphs and the rest of the rig). Skipped when
+    // nofacial is set, since that strips everything below anyway.
+    if (pDef->numRemoveFlexControllers > 0 && !pDef->noFacial)
+        ApplyRemoveFlexControllerFilter(pSource, pDef);
+
     // Strip facial data (flex controllers/rules/deltas) if requested
     if (pDef->noFacial)
         ApplyNoFacialFilter(pSource);
+
+    // Drop the source's DMX attachments from this clone. Attachments live per-source in
+    // m_Attachments (later merged into the global list by AddBodyAttachments), so clearing
+    // them on the owned clone keeps the raw cached source untouched.
+    if (pDef->noAttachments && pSource->m_Attachments.Count() > 0) {
+        int nRemoved = pSource->m_Attachments.Count();
+        pSource->m_Attachments.RemoveAll();
+        Msg("$rendermesh '%s': noattachments - stripped %d attachment%s from '%s'\n",
+            pDef->name, nRemoved, nRemoved == 1 ? "" : "s", pSource->filename);
+    }
 
     if (pSource->numfaces == 0)
         MdlError("$rendermesh '%s': filter produced a 0-polygon mesh from '%s' - check mesh names and defaultState\n",
@@ -8096,8 +8274,22 @@ void Cmd_RenderMesh() {
             GetToken(false);
             Q_strncpy(def.removeMaterials[def.numRemoveMaterials], token, MAXSTUDIONAME);
             def.numRemoveMaterials++;
+        } else if (Q_stricmp(token, "removeflexcontroller") == 0) {
+            if (def.numRemoveFlexControllers >= MAX_RENDERMESH_FLEXCTRL_REMOVES)
+                MdlError("$rendermesh '%s': too many removeflexcontroller entries (max %d)\n", def.name, MAX_RENDERMESH_FLEXCTRL_REMOVES);
+            GetToken(false);
+            Q_strncpy(def.removeFlexControllers[def.numRemoveFlexControllers], token, MAXSTUDIONAME);
+            def.numRemoveFlexControllers++;
         } else if (Q_stricmp(token, "nofacial") == 0) {
             def.noFacial = true;
+        } else if (Q_stricmp(token, "nojigglebones") == 0) {
+            def.noJiggleBones = true;
+        } else if (Q_stricmp(token, "nohitbox") == 0) {
+            def.noHitbox = true;
+        } else if (Q_stricmp(token, "noproceduralbones") == 0) {
+            def.noProceduralBones = true;
+        } else if (Q_stricmp(token, "noattachments") == 0) {
+            def.noAttachments = true;
         } else {
             if (def.numOverrides >= MAX_RENDERMESH_OVERRIDES)
                 MdlError("$rendermesh '%s': too many mesh overrides (max %d)\n", def.name, MAX_RENDERMESH_OVERRIDES);
@@ -8107,11 +8299,16 @@ void Cmd_RenderMesh() {
         }
     }
 
-    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s, %d removematerial%s%s)\n",
+    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s, %d removematerial%s, %d removeflexcontroller%s%s%s%s%s%s)\n",
         def.name, def.filename, (int)def.defaultState,
         def.numOverrides, def.numOverrides == 1 ? "" : "s",
         def.numRemoveMaterials, def.numRemoveMaterials == 1 ? "" : "s",
-        def.noFacial ? ", nofacial" : "");
+        def.numRemoveFlexControllers, def.numRemoveFlexControllers == 1 ? "" : "s",
+        def.noFacial ? ", nofacial" : "",
+        def.noJiggleBones ? ", nojigglebones" : "",
+        def.noHitbox ? ", nohitbox" : "",
+        def.noProceduralBones ? ", noproceduralbones" : "",
+        def.noAttachments ? ", noattachments" : "");
     g_numRendermeshDefs++;
 }
 
@@ -8139,7 +8336,17 @@ static void EnsureRenderMeshOwnedSource(s_rendermesh_def_t *pDef, bool reverse) 
         return;
 
     g_bLoadingRenderMeshRaw = true;
+    // Suppress the DMX's jigglebone / hitbox parsing for this clone if requested. These are
+    // registered into model-global state during the raw parse (not stored per-source), so the
+    // filter has to run at load time rather than post-clone like nofacial. On a cache hit the
+    // parse is skipped and nothing is contributed anyway, so nothing needs suppressing.
+    g_bRenderMeshSuppressJiggleBones = pDef->noJiggleBones;
+    g_bRenderMeshSuppressHitboxes = pDef->noHitbox;
+    g_bRenderMeshSuppressProceduralBones = pDef->noProceduralBones;
     s_source_t *pRaw = Load_Source(pDef->filename, "", reverse, true);
+    g_bRenderMeshSuppressJiggleBones = false;
+    g_bRenderMeshSuppressHitboxes = false;
+    g_bRenderMeshSuppressProceduralBones = false;
     g_bLoadingRenderMeshRaw = false;
 
     if (pRaw) {
@@ -8157,6 +8364,15 @@ s_source_t *GetRenderMeshSource(const char *name) {
     EnsureRenderMeshOwnedSource(pDef, false);
     pDef->used = true;
     return pDef->pOwnedSource;
+}
+
+// Mark a $rendermesh as used without loading its geometry. Called at parse time by
+// consumers (e.g. $generate/$generatejoint) whose actual resolution happens after
+// ReportUnusedRenderMeshDefs() runs, so the def isn't falsely flagged as unused.
+void MarkRenderMeshUsed(const char *name) {
+    s_rendermesh_def_t *pDef = FindRenderMeshDef(name);
+    if (pDef)
+        pDef->used = true;
 }
 
 
@@ -9077,6 +9293,7 @@ MDLCommand_t g_Commands[] =
                 {"$hgroup",                          Cmd_Hitgroup,},
                 {"$hbox",                            Cmd_Hitbox,},
                 {"$hboxset",                         Cmd_HitboxSet,},
+                {"$forcehboxset",                    Cmd_ForceHitboxSet,},
                 {"$surfaceprop",                     Cmd_SurfaceProp,},
                 {"$jointsurfaceprop",                Cmd_JointSurfaceProp,},
                 {"$contents",                        Cmd_Contents,},
@@ -9099,6 +9316,7 @@ MDLCommand_t g_Commands[] =
                 {"$skiptransition",                  Cmd_Skiptransition,},
                 {"$calctransitions",                 Cmd_CalcTransitions,},
                 {"$staticprop",                      Cmd_StaticProp,},
+                {"$simpleprop",                      Cmd_SimpleProp,},
                 {"$staticproppose",                  Cmd_StaticPropPose,},
                 {"$nosequence",                      Cmd_NoSequence,},
                 {"$zbrush",                          Cmd_ZBrush,},
@@ -9144,6 +9362,7 @@ MDLCommand_t g_Commands[] =
                 {"$subd",                            Cmd_SubdivisionSurface,},
                 {"$boneflexdriver",                  Cmd_BoneFlexDriver,},
                 {"$noautodmxrulesglobal",            Cmd_NoAutoDMXRulesGlobal,},
+                {"$noproceduralbones",               Cmd_NoProceduralBones,},
                 {"$modelbudget",                     Cmd_ModelBudget,},
                 {"$preservetriangleorder",           Cmd_PreserveTriangleOrder,},
                 {"$qcassert",                        Cmd_QCAssert,},
