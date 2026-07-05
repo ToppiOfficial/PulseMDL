@@ -141,6 +141,14 @@ int nummacros;
 
 void DefineMacro( char *macroname )
 {
+	for ( int i = 0; i < nummacros; i++ )
+	{
+		if ( strcmpi( macrolist[i]->filename, macroname ) == 0 )
+		{
+			Error( "\"$definemacro %s\" is already defined.\n", macroname );
+		}
+	}
+
 	script_t	*pmacro = (script_t *)malloc( sizeof( script_t ) );
 
 	strcpy( pmacro->filename, macroname );
@@ -278,9 +286,9 @@ void DefineVariable( char *variablename )
 
 	for ( int i=0; i<g_definevariable.Count(); i++ )
 	{
-		if ( !V_strcmp( g_definevariable[i].value, v.value ) )
+		if ( !V_strcmp( g_definevariable[i].param_lcase, v.param_lcase ) )
 		{
-			Warning( "\"$definevariable %s %s\" already exists as \"%s\".", v.param_lcase, v.value, g_definevariable[i].param_lcase );
+			Warning( "\"$definevariable %s\" is defined more than once (previous value \"%s\", new value \"%s\").\n", v.param_lcase, g_definevariable[i].value, v.value );
 		}
 	}
 
@@ -315,6 +323,34 @@ void RedefineVariable( char *variablename )
 	{
 		Error("Cannot redefine undefined variable \"%s\". Use $definevariable instead.\n", v.param );
 	}
+}
+
+
+void SetVariable( char *variablename )
+{
+	variable_t v;
+
+	v.param = strdup( variablename );
+
+	GetToken( false );
+
+	v.value = strdup( token );
+
+	v.param_lcase = strlwr( strdup(v.param) );
+
+	for ( int i=0; i<g_definevariable.Count(); i++ )
+	{
+		if ( !V_strcmp( g_definevariable[i].param, v.param ) )
+		{
+			free( g_definevariable[i].param );
+			free( g_definevariable[i].value );
+			free( g_definevariable[i].param_lcase );
+			g_definevariable[i] = v;
+			return;
+		}
+	}
+
+	g_definevariable.AddToTail( v );
 }
 
 
@@ -1540,6 +1576,12 @@ skipspace:
 	{
 		GetToken (false);
 		RedefineVariable(token);
+		return GetToken (crossline);
+	}
+	else if (!stricmp (token, "$setvariable"))
+	{
+		GetToken (false);
+		SetVariable(token);
 		return GetToken (crossline);
 	}
 	else if (!stricmp (token, "$if"))

@@ -2360,7 +2360,7 @@ void CollisionModel_Write( long checkSum )
 			if ( pPair->obj0 >= 0 && pPair->obj1 >= 0 && pPair->obj0 != pPair->obj1 )
 				KeyWriteIntPair( fp, "collisionpair", pPair->obj0, pPair->obj1 );
 			else
-				MdlWarning( "Invalid collision pair (%s, %s)\n", pPair->pName0, pPair->pName1 );
+				MdlError( "Invalid collision pair (%s, %s)\n", pPair->pName0, pPair->pName1 );
 			pPair = pPair->pNext;
 		}
 		fprintf( fp, "}\n" );

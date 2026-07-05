@@ -62,8 +62,8 @@ Studio models are position independent, so the cache manager can move them.
 
 struct studiohdr_t;
 
-#define MAXSTUDIOTRIANGLES	524288
-#define MAXSTUDIOVERTS		524288
+#define MAXSTUDIOTRIANGLES	1048576
+#define MAXSTUDIOVERTS		1048576
 #define	MAXSTUDIOFLEXVERTS	65536  	// max number of verts that can be flexed per mesh.  TODO: tune this
 #define MAXSTUDIOSKINS		128		// total textures
 #define MAXSTUDIOBONES		1024	// total bones actually used

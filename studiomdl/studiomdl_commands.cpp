@@ -3495,6 +3495,21 @@ static void Cmd_RemoveMesh(LodScriptData_t &lodData) {
 }
 
 //-----------------------------------------------------------------------------
+// Parse removemeshword command: removes any mesh whose material name contains
+// the given word as a case-insensitive substring (matched against the
+// path-stripped material base name, so DMX material pathing is ignored).
+//-----------------------------------------------------------------------------
+
+static void Cmd_RemoveMeshWord(LodScriptData_t &lodData) {
+    int i = lodData.meshWordRemovals.AddToTail();
+    CLodScriptReplacement_t &newReplacement = lodData.meshWordRemovals[i];
+
+    // word to match anywhere within the material name
+    GetToken(false);
+    newReplacement.SetSrcName(token);
+}
+
+//-----------------------------------------------------------------------------
 // Parse decimatemodel command - auto-decimates the named model via meshoptimizer
 //-----------------------------------------------------------------------------
 
@@ -3524,6 +3539,26 @@ static void Cmd_GenerateLod(LodScriptData_t &lodData) {
     if (lodData.IsStrippedFromModel() && !g_StudioMdlContext.quiet) {
         printf("Stripped decimatemodel \"%s\" @ %.1f\n", newEntry.GetSrcName(), lodData.switchValue);
     }
+}
+
+//-----------------------------------------------------------------------------
+// Parse decimateallmodel command - blanket decimation applied to every body-part
+// model (used by $body/$bodygroup/$model) that has no explicit per-mesh entry.
+//-----------------------------------------------------------------------------
+
+static void Cmd_GenerateLodAll(LodScriptData_t &lodData) {
+    // decimation factor: 1.0 = full detail, 0.5 = 50% triangles
+    if (!TokenAvailable()) {
+        MdlError("decimateallmodel: expected decimation factor (%d) : %s\n",
+                 g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+    }
+    GetToken(false);
+    float factor = verify_atof(token);
+    if (factor <= 0.0f || factor > 1.0f) {
+        MdlError("decimateallmodel: decimation factor must be in range (0, 1.0] (%d) : %s\n",
+                 g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+    }
+    lodData.SetDecimateAllFactor(factor);
 }
 
 void Cmd_LOD(const char *cmdname) {
@@ -3580,6 +3615,8 @@ void Cmd_LOD(const char *cmdname) {
             Cmd_ReplaceModel(newLOD);
         } else if (stricmp("decimatemodel", token) == 0) {
             Cmd_GenerateLod(newLOD);
+        } else if (stricmp("decimateallmodel", token) == 0) {
+            Cmd_GenerateLodAll(newLOD);
         } else if (stricmp("removemodel", token) == 0) {
             Cmd_RemoveModel(newLOD);
         } else if (stricmp("replacebone", token) == 0) {
@@ -3590,6 +3627,8 @@ void Cmd_LOD(const char *cmdname) {
             Cmd_ReplaceMaterial(newLOD);
         } else if (stricmp("removemesh", token) == 0) {
             Cmd_RemoveMesh(newLOD);
+        } else if (stricmp("removemeshword", token) == 0) {
+            Cmd_RemoveMeshWord(newLOD);
         } else if (stricmp("nofacial", token) == 0) {
             newLOD.EnableFacialAnimation(false);
         } else if (stricmp("facial", token) == 0) {
@@ -3606,7 +3645,8 @@ void Cmd_LOD(const char *cmdname) {
         } else if (stricmp("}", token) == 0) {
             break;
         } else {
-            MdlError("invalid input while processing %s (%d) : %s", cmdname, g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
+            MdlError("unknown %s option \"%s\" (%d) : %s",
+                     cmdname, token, g_StudioMdlContext.iLinecount, g_StudioMdlContext.szLine);
         }
     }
 
@@ -6845,11 +6885,17 @@ int Option_Activity(s_sequence_t *psequence) {
         }
     }
 
-    GetToken(false);
-    psequence->actweight = verify_atoi(token);
+    // Weight is optional; when omitted it defaults to -1 (an effective weight of
+    // 1 via iabs() at activity-hash time, matching an unspecified weight).
+    if (TokenAvailable()) {
+        GetToken(false);
+        psequence->actweight = verify_atoi(token);
 
-    if (psequence->actweight == 0) {
-        TokenError("Activity %s has a zero weight (weights must be integers > 0)\n", psequence->activityname);
+        if (psequence->actweight == 0) {
+            TokenError("Activity %s has a zero weight (weights must be integers > 0)\n", psequence->activityname);
+        }
+    } else {
+        psequence->actweight = -1;
     }
 
     return 0;

@@ -4667,8 +4667,8 @@ void TagProceduralBones() {
         }
 
         if (g_axisinterpbones[j].control == -1) {
-            MdlError("Missing control bone \"%s\" for procedural bone \"%s\"\n", g_axisinterpbones[j].bonename,
-                     g_axisinterpbones[j].controlname);
+            MdlError("Missing control bone \"%s\" for procedural bone \"%s\"\n", g_axisinterpbones[j].controlname,
+                     g_axisinterpbones[j].bonename);
         }
 
         g_bonetable[g_axisinterpbones[j].bone].flags |= BONE_ALWAYS_PROCEDURAL; // ??? what about physics rules
@@ -4690,8 +4690,8 @@ void TagProceduralBones() {
         }
 
         if (g_quatinterpbones[j].control == -1) {
-            MdlError("Missing control bone \"%s\" for procedural bone \"%s\"\n", g_quatinterpbones[j].bonename,
-                     g_quatinterpbones[j].controlname);
+            MdlError("Missing control bone \"%s\" for procedural bone \"%s\"\n", g_quatinterpbones[j].controlname,
+                     g_quatinterpbones[j].bonename);
         }
 
         g_bonetable[g_quatinterpbones[j].bone].flags |= BONE_ALWAYS_PROCEDURAL; // ??? what about physics rules

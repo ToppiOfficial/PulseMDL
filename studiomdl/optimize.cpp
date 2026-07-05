@@ -2256,7 +2256,7 @@ namespace OptimizedModel {
 
     bool COptimizedModel::MeshNeedsRemoval(studiohdr_t *pHdr, mstudiomesh_t *pStudioMesh,
                                            LodScriptData_t &scriptLOD) {
-        if (scriptLOD.meshRemovals.IsEmpty())
+        if (scriptLOD.meshRemovals.IsEmpty() && scriptLOD.meshWordRemovals.IsEmpty())
             return false;
         int nTextureID = MaterialToTexture(pStudioMesh->material);
         if (nTextureID < 0)
@@ -2267,6 +2267,12 @@ namespace OptimizedModel {
         for (int i = 0; i < scriptLOD.meshRemovals.Count(); i++) {
             Q_FileBase(scriptLOD.meshRemovals[i].GetSrcName(), baseRemovalName, sizeof(baseRemovalName));
             if (!stricmp(baseMeshName, baseRemovalName))
+                return true;
+        }
+        // removemeshword: case-insensitive substring match against the base name
+        for (int i = 0; i < scriptLOD.meshWordRemovals.Count(); i++) {
+            const char *pWord = scriptLOD.meshWordRemovals[i].GetSrcName();
+            if (pWord && pWord[0] && V_stristr(baseMeshName, pWord))
                 return true;
         }
         return false;

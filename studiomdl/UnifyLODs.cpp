@@ -497,6 +497,16 @@ static s_mesh_t *FindOrCullMesh(int nLodID, s_source_t *pSrc, int nMaterialID) {
         }
     }
 
+    // removemeshword: case-insensitive substring match against the base name
+    // (path already stripped, so DMX material pathing is ignored)
+    for (int i = 0; i < g_ScriptLODs[nLodID].meshWordRemovals.Count(); i++) {
+        const char *pWord = g_ScriptLODs[nLodID].meshWordRemovals[i].GetSrcName();
+        if (pWord && pWord[0] && V_stristr(baseMeshName, pWord)) {
+            // mesh has been marked for removal
+            return nullptr;
+        }
+    }
+
     s_mesh_t *pMesh = FindMeshByMaterial(pSrc, nMaterialID);
     return pMesh;
 }
@@ -1245,19 +1255,36 @@ static void GetLODSources(CUtlVector<s_source_t *> &lods, const s_model_t *pSrcM
         s_source_t *pSource = GetModelLODSource(pLookupName, scriptLOD, &bFound);
 
         if (!pSource && !bFound) {
-            // Check decimatemodel entries - decimate LOD0's geometry for this LOD level
+            // Check decimatemodel entries - decimate the full-detail source for this
+            // LOD level. The base is always pSrcModel->source (LOD0 / original geometry),
+            // never lods[0]: at lodID 0 lods[0] is not yet assigned (a default-constructed
+            // indeterminate pointer), and at lodID > 0 lods[0] would make the factor
+            // cumulative instead of "percent of the original triangle count".
             for (int j = 0; j < scriptLOD.generateLods.Count(); j++) {
                 char entryBuf[MAX_PATH];
                 const char *pEntryBase = GetModelBaseName(scriptLOD.generateLods[j].GetSrcName(), entryBuf);
                 if (Q_stricmp(pBaseName, pEntryBase) == 0) {
-                    s_source_t *pLOD0 = lods.Count() > 0 ? lods[0] : pSrcModel->source;
-                    if (pLOD0 && !scriptLOD.IsStrippedFromModel()) {
-                        pSource = GenerateDecimatedSource(pLOD0, scriptLOD.generateLods[j].m_flDecimationFactor, lodID);
+                    if (pSrcModel->source && !scriptLOD.IsStrippedFromModel()) {
+                        pSource = GenerateDecimatedSource(pSrcModel->source, scriptLOD.generateLods[j].m_flDecimationFactor, lodID);
                     }
                     bFound = true;
                     break;
                 }
             }
+        }
+
+        if (!pSource && !bFound && scriptLOD.HasDecimateAll() && !scriptLOD.IsStrippedFromModel()) {
+            // decimateallmodel: blanket-decimate any body-part model that had no
+            // explicit replacemodel/removemodel/decimatemodel entry above (those take
+            // priority per-mesh). This only ever runs for models in g_model[] (i.e.
+            // those used by $body/$bodygroup/$model); rendermeshes used solely by
+            // $collisionjoints never become models here, so they are naturally skipped.
+            // The factor is applied against the full-detail source directly, so it is
+            // consistent across LOD levels regardless of ordering.
+            if (pSrcModel->source) {
+                pSource = GenerateDecimatedSource(pSrcModel->source, scriptLOD.GetDecimateAllFactor(), lodID);
+            }
+            bFound = true;
         }
 
         if (!pSource && !bFound) {

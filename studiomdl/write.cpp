@@ -595,10 +595,16 @@ void LoadPreexistingSequenceOrder(const char *pFilename) {
         }
     } else if (g_StudioMdlContext.modelIntentionallyHasZeroSequences) {
         // some models like scaffolds, intentionally don't have input sequences. Not sure if this is the best way to allow this exception.
+    } else if (len && pStudioHdr && pStudioHdr->numincludemodels > 0) {
+        // The model's sequences live in its $includemodel(s), which are only linked
+        // together at engine load time -- they can't be read back here at compile time.
+        // This is expected and harmless; the sequence-remap table is simply left empty.
+        Msg("   Skipping sequence remap: sequences come from %i $includemodel%s (not linked at compile time).\n",
+            pStudioHdr->numincludemodels, pStudioHdr->numincludemodels == 1 ? "" : "s");
     } else if (g_StudioMdlContext.errorOnSeqRemapFail) {
-        MdlError("Zero-size file or no sequences. This model requires a sequence remapping match.\n");
+        MdlError("Preexisting model has no readable sequences. This model requires a sequence remapping match.\n");
     } else {
-        MdlWarning("Zero-size file or no sequences.\n");
+        MdlWarning("Preexisting model has no readable sequences; skipping sequence remap.\n");
     }
 }
 
@@ -2763,6 +2769,20 @@ static void WriteModel(studiohdr_t *phdr) {
             pmesh[m].modelindex = (byte *) &pmodel[i] - (byte *) &pmesh[m];
             pmesh[m].numvertices = pLodData->mesh[n].numvertices;
             pmesh[m].vertexoffset = pLodData->mesh[n].vertexoffset;
+
+            // The VTX strip-group vertex (Vertex_t::origMeshVertID) is a 16-bit
+            // unsigned short, so a single mesh (one material) can only address
+            // 65535 unique verts. There is no auto mesh splitting, so past this
+            // the runtime silently aliases high verts to (id % 65536) -> scrambled
+            // geometry (it does not crash). Warn, but keep compiling: models that
+            // stay under the cap per material are unaffected, and the total is only
+            // bounded by MAXSTUDIOVERTS across all meshes.
+            if (pmesh[m].numvertices > 65535) {
+                MdlWarning("Material \"%s\" has too many vertices (%d, max 65535 per "
+                           "material). Split this part of the model across more materials "
+                           "so no single material goes over 65535.\n",
+                           g_texture[n].name, pmesh[m].numvertices);
+            }
         }
 
         // set expected base offsets to external data

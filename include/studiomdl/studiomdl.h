@@ -1897,6 +1897,9 @@ public:
     CUtlVector<CLodScriptReplacement_t> boneTreeCollapses;
     CUtlVector<CLodScriptReplacement_t> materialReplacements;
     CUtlVector<CLodScriptReplacement_t> meshRemovals;
+    // removemeshword: remove any mesh whose (path-stripped) material name
+    // contains the stored word as a case-insensitive substring
+    CUtlVector<CLodScriptReplacement_t> meshWordRemovals;
 
 
     void EnableFacialAnimation(bool val) {
@@ -1915,14 +1918,31 @@ public:
         return m_bStrippedFromModel;
     }
 
+    // decimateallmodel: blanket decimation factor applied to every body-part
+    // model source that has no explicit replacemodel/removemodel/decimatemodel
+    // entry in this block. <= 0.0f means unset.
+    void SetDecimateAllFactor(float val) {
+        m_flDecimateAllFactor = val;
+    }
+
+    float GetDecimateAllFactor() const {
+        return m_flDecimateAllFactor;
+    }
+
+    bool HasDecimateAll() const {
+        return m_flDecimateAllFactor > 0.0f;
+    }
+
     LodScriptData_t() {
         m_bFacialAnimation = true;
         m_bStrippedFromModel = false;
+        m_flDecimateAllFactor = -1.0f;
     }
 
 private:
     bool m_bFacialAnimation;
     bool m_bStrippedFromModel;
+    float m_flDecimateAllFactor;
 };
 
 EXTERN CUtlVector<LodScriptData_t> g_ScriptLODs;
