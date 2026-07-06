@@ -8742,7 +8742,10 @@ static void InjectDummyBindPoseSequence() {
 struct s_moveweightreq_t {
     int target;
     int residual;
-    float factor;       // [0,1] fraction of target weight handed to residual
+    float factor;       // [0,1] ramp band width as a fraction of the move span (1 = whole span, 0 = hard cut)
+    float smoothing;    // [0,1] extra S-curve easing inside the band (0 = pure linear, 1 = full smoothstep)
+    Vector oldPos;      // bone bind position before the edit (pose space) - ramp start
+    Vector newPos;      // bone bind position after the edit (pose space) - ramp end
 };
 static CUtlVector<s_moveweightreq_t> g_moveWeightQueue;
 
@@ -8861,6 +8864,10 @@ void ApplyBoneTransformEdits() {
             continue;
         }
 
+        // bind position before the edit - start point of the transformweights ramp
+        Vector preEditPos;
+        MatrixGetColumn(g_bonetable[t].boneToPose, 3, preEditPos);
+
         // Apply the angle part then the position part, each as its own category
         // delta. The position part is computed on the post-rotation frame so the
         // two compose in a stable order.
@@ -8885,11 +8892,28 @@ void ApplyBoneTransformEdits() {
         if (ed.hasMoveWeight) {
             int r = findGlobalBone(ed.residualbone);
             if (r == -1) {
-                MdlWarning("$transformbindposebone transformweights: unknown residual bone \"%s\" (line %d)\n",
-                           ed.residualbone, ed.linecount);
+                MdlError("$transformbindposebone transformweights: residual bone \"%s\" (line %d) not found\n",
+                         ed.residualbone, ed.linecount);
             }
-            s_moveweightreq_t req = {t, r, ed.moveWeightFactor};
-            g_moveWeightQueue.AddToTail(req);
+            // the ramp runs from the bone's pre-edit to post-edit bind position;
+            // 'offset' shifts the end point only (plain model-space addition on top
+            // of the position edit) - the bone itself stays where the edit put it
+            Vector postEditPos;
+            MatrixGetColumn(g_bonetable[t].boneToPose, 3, postEditPos);
+            postEditPos += Vector(ed.moveWeightOffset[0], ed.moveWeightOffset[1], ed.moveWeightOffset[2]);
+            if ((postEditPos - preEditPos).LengthSqr() < 1.0e-8f) {
+                MdlWarning("$transformbindposebone transformweights: bone \"%s\" (line %d) ramp start and end coincide (position change plus offset is zero) - skipped\n",
+                           ed.name, ed.linecount);
+            } else {
+                s_moveweightreq_t req;
+                req.target = t;
+                req.residual = r;
+                req.factor = ed.moveWeightFactor;
+                req.smoothing = ed.moveWeightSmoothing;
+                req.oldPos = preEditPos;
+                req.newPos = postEditPos;
+                g_moveWeightQueue.AddToTail(req);
+            }
         }
     }
 
@@ -9007,9 +9031,17 @@ static void PopAnimSrcRealignOverride(const CUtlVector<s_srcrealignsave_t> &save
 // The bind-pose edit itself is weight-preserving (it only relocates srcRealign/boneToPose,
 // leaving the rest mesh and animations visually identical), so it never drops any
 // weight. transformweights is the explicit ask to hand the moved bone's influence to a
-// residual bone: for every vertex weighted to the moved (target) bone, transfer
-// <factor> of that weight onto the residual bone (1 = full, 0 = none) and
-// renormalize. The rest position was already baked from the original weights in
+// residual bone, as a spatial linear ramp along the bone's move axis: project each
+// vertex weighted to the moved (target) bone onto the old->new bind-position axis.
+// The transferred fraction is 1 at the original bone location and 0 at the new
+// location (clamped beyond the endpoints) - the vertices the bone moved away from
+// hand off to the residual, the ones it moved toward stay. <factor> is the smoothness: it is the width of
+// the transition band as a fraction of the span, centered at the midpoint - 1.0
+// blends linearly across the whole span, 0.5 blends only across the middle half
+// (sharper), 0 is a hard cut at the midpoint. <smoothing> optionally eases the band
+// with an S-curve (0 = pure linear, 1 = full smoothstep) so a sharp band still
+// transitions softly. Weights are renormalized after the
+// transfer. The rest position was already baked from the original weights in
 // InitRemappedVertex, so the rest mesh is unchanged - only animation deformation
 // of the re-skinned fraction now follows the residual bone.
 void ApplyMoveWeightQueue() {
@@ -9020,10 +9052,14 @@ void ApplyMoveWeightQueue() {
         const int t = g_moveWeightQueue[qi].target;
         const int r = g_moveWeightQueue[qi].residual;
         const float factor = g_moveWeightQueue[qi].factor;
+        const float smoothing = g_moveWeightQueue[qi].smoothing;
+        const Vector &rampStart = g_moveWeightQueue[qi].oldPos;
+        const Vector rampAxis = g_moveWeightQueue[qi].newPos - rampStart;
+        const float rampLenSqr = rampAxis.LengthSqr();
 
-        // unresolved residual bone (already warned in ApplyBoneTransformEdits), a
-        // self-transfer, or a zero factor is a no-op
-        if (r < 0 || r == t || factor <= 1.0e-6f)
+        // unresolved residual bone (already warned in ApplyBoneTransformEdits) or a
+        // self-transfer is a no-op; a degenerate axis was rejected at queue time
+        if (r < 0 || r == t || rampLenSqr < 1.0e-8f)
             continue;
 
         for (int i = 0; i < g_numsources; i++) {
@@ -9051,8 +9087,33 @@ void ApplyMoveWeightQueue() {
                 if (wTarget <= 1.0e-6f)
                     continue;
 
+                // project the vertex onto the move axis: 0 at the bone's original
+                // bind position, 1 at its new position. The transfer runs OPPOSITE
+                // to the move - vertices left behind at the original end hand off
+                // to the residual, vertices toward the new end stay on the moved bone
+                const float along = DotProduct(pSource->m_GlobalVertices[j].position - rampStart, rampAxis) / rampLenSqr;
+
+                // factor is the transition band width around the midpoint: 1 =
+                // linear across the whole span, smaller = sharper, 0 = hard cut
+                float blend;
+                if (factor <= 1.0e-6f)
+                    blend = (along <= 0.5f) ? 1.0f : 0.0f;
+                else
+                    blend = clamp(0.5f - (along - 0.5f) / factor, 0.0f, 1.0f);
+
+                // optional extra smoothing: ease the band with a smoothstep, blended
+                // in by <smoothing> - softens the kinks at the band edges without
+                // moving them (no effect on a hard cut, which has no band to ease)
+                if (smoothing > 1.0e-6f) {
+                    const float eased = blend * blend * (3.0f - 2.0f * blend);
+                    blend += (eased - blend) * smoothing;
+                }
+
+                if (blend <= 1.0e-6f)
+                    continue;
+
                 // weight handed to the residual; the remainder stays on the moved bone
-                const float wMove = wTarget * factor;
+                const float wMove = wTarget * blend;
                 const float wKeep = wTarget - wMove;
 
                 // is the residual bone already an influence on this vertex?

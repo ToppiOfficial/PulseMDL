@@ -4062,8 +4062,16 @@ void Cmd_DefineBone() {
 //     position <x y z>                     translate bind position (local axes by default)
 //     worldangles                          'angles' uses world axes
 //     worldposition                        'position' uses world axes
-//     transformweights <residualbone> [f]  re-skin: transfer f ([0,1], default 0.55) of the
-//                                          bone's vertex weight to residualbone
+//     transformweights <residualbone> [f] [s]  re-skin: ramp the bone's vertex weight
+//                                          to residualbone along the old->new position
+//                                          axis (full transfer at the old spot, none at
+//                                          the new); f ([0,1], default 1.0) is the ramp
+//                                          band width (1 = linear across the whole span,
+//                                          0 = hard cut at midpoint); s ([0,1], default
+//                                          0.0) adds S-curve easing inside the band
+//     offset <x y z>                       shifts the transformweights ramp end point
+//                                          (model-space, added on top of the position
+//                                          edit); the bone itself is not moved further
 //     transformverts                       rigidly carry the bone's rigged verts at rest
 //                                          (mutually exclusive with transformweights)
 //     ignoreanimation                      edit does not flow into any $sequence/$animation
@@ -4103,25 +4111,40 @@ void Cmd_TransformBindPoseBone() {
             e.hasMoveWeight = true;
             GetToken(false);
             strcpyn(e.residualbone, token);
-            // optional factor: fraction of the bone's weight handed to the residual
-            // bone (1 = full transfer, 0 = none). Omitted -> 0.55 default.
-            e.moveWeightFactor = 0.55f;
-            if (TokenAvailable()) {
+            // up to two optional numbers: [factor] [smoothing]
+            //   factor    - ramp band width along the bone's old->new position axis
+            //               (1 = linear blend across the whole span, 0 = hard cut
+            //               at the midpoint). Omitted -> 1.0 default.
+            //   smoothing - extra S-curve easing inside the band (0 = pure linear,
+            //               1 = full smoothstep). Omitted -> 0.0 default.
+            e.moveWeightFactor = 1.0f;
+            e.moveWeightSmoothing = 0.0f;
+            for (int nOpt = 0; nOpt < 2 && TokenAvailable(); nOpt++) {
                 GetToken(false);
                 // only consume the token if it parses as a number; otherwise it is
                 // a following keyword - put it back
                 char *endp = nullptr;
                 float f = (float)strtod(token, &endp);
-                if (endp != token && *endp == '\0') {
-                    e.moveWeightFactor = f;
-                    if (e.moveWeightFactor < 0.0f)
-                        e.moveWeightFactor = 0.0f;
-                    else if (e.moveWeightFactor > 1.0f)
-                        e.moveWeightFactor = 1.0f;
-                } else {
+                if (endp == token || *endp != '\0') {
                     UnGetToken();
+                    break;
                 }
+                if (f < 0.0f)
+                    f = 0.0f;
+                else if (f > 1.0f)
+                    f = 1.0f;
+                if (nOpt == 0)
+                    e.moveWeightFactor = f;
+                else
+                    e.moveWeightSmoothing = f;
             }
+        } else if (!V_stricmp(token, "offset")) {
+            // shifts the transformweights ramp end point only (plain model-space
+            // addition on top of the position edit); the bone itself is not moved
+            e.hasMoveWeightOffset = true;
+            GetToken(false); e.moveWeightOffset[0] = verify_atof(token);
+            GetToken(false); e.moveWeightOffset[1] = verify_atof(token);
+            GetToken(false); e.moveWeightOffset[2] = verify_atof(token);
         } else if (!V_stricmp(token, "transformverts")) {
             e.transformVerts = true;
         } else if (!V_stricmp(token, "ignoreanimation")) {
@@ -4136,6 +4159,8 @@ void Cmd_TransformBindPoseBone() {
 
     if (e.transformVerts && e.hasMoveWeight)
         TokenError("$transformbindposebone: 'transformverts' and 'transformweights' are mutually exclusive\n");
+    if (e.hasMoveWeightOffset && !e.hasMoveWeight)
+        TokenError("$transformbindposebone: 'offset' requires 'transformweights'\n");
     if (!e.hasAngles && !e.hasPosition)
         TokenError("$transformbindposebone: requires at least one of 'angles' or 'position'\n");
 

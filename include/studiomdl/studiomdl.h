@@ -332,7 +332,10 @@ struct s_bonetransformedit_t {
     float pos[3];                    // units
     bool hasMoveWeight;              // 'transformweights <residualbone> [factor]' present
     char residualbone[MAXSTUDIONAME];
-    float moveWeightFactor;          // [0,1] fraction of moved-bone weight handed to residual
+    float moveWeightFactor;          // [0,1] ramp smoothness: transition width as a fraction of the old->new span (1 = linear, 0 = hard cut)
+    float moveWeightSmoothing;       // [0,1] extra S-curve easing inside the ramp band (0 = pure linear, 1 = full smoothstep)
+    bool hasMoveWeightOffset;        // 'offset <x y z>' present (requires transformweights)
+    float moveWeightOffset[3];       // model-space offset added to the ramp end point only - the bone itself is not moved further
     bool transformVerts;            // rigidly carry the bone's rigged verts at rest (excludes transformweights)
     bool ignoreAnimation;           // edit does not flow into any $sequence/$animation frame
     bool ignoreHitbox;               // keep this bone's manual hitboxes in place
