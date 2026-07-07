@@ -270,7 +270,9 @@ void ParseFaceData(s_source_t *psource, int material, s_face_t *pFace) {
             bones[0]  = bone;
             weights[0] = 1.0f;
         } else {
-            iCount = SortAndBalanceBones(iCount, MAXSTUDIOBONEWEIGHTS, bones, weights);
+            // keep up to the source-stage cap; the clip to MAXSTUDIOBONEWEIGHTS
+            // happens after bone collapse (BalanceGlobalBoneWeights)
+            iCount = SortAndBalanceBones(iCount, MAXSTUDIOSRCBONEWEIGHTS, bones, weights);
         }
 
         index[j] = lookup_index(psource, material, pos, nrm, t, iCount, bones, weights, iExtras, extras);

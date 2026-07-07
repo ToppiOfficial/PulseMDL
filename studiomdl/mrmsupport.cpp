@@ -70,19 +70,11 @@ int SortAndBalanceBones( int iCount, int iMaxCount, int bones[], float weights[]
 		}
 	} while (bShouldSort);
 
-#ifdef MDLCOMPILE
-	// throw away all weights less than 1/10,000th
-	while (iCount > 1 && weights[iCount-1] < 0.0001)
+	// throw away insignificant weights
+	while (iCount > 1 && weights[iCount-1] < STUDIO_MIN_BONE_WEIGHT)
 	{
 		iCount--;
 	}
-#else // #ifdef MDLCOMPILE
-	// throw away all weights less than 1/20th
-	while (iCount > 1 && weights[iCount-1] < 0.05)
-	{
-		iCount--;
-	}
-#endif // #ifdef MDLCOMPILE
 
 	// clip to the top iMaxCount bones
 	if (iCount > iMaxCount)
@@ -165,7 +157,7 @@ void Grab_Vertexlist( s_source_t *psource )
 			}
 			else if (i > 5)
 			{
-				iCount = SortAndBalanceBones( iCount, MAXSTUDIOBONEWEIGHTS, bones, weights );
+				iCount = SortAndBalanceBones( iCount, MAXSTUDIOSRCBONEWEIGHTS, bones, weights );
 
 				VectorCopy( p, g_StudioMdlContext.vertex[j] );
 				g_StudioMdlContext.bone[j].numbones = iCount;
@@ -547,14 +539,9 @@ static void BuildUniqueVertexList( s_source_t *pSource, const int *pDesiredToVLi
 		VectorCopy( g_StudioMdlContext.vertex[ v_listdata[j].v ], vertex.position );
 		VectorCopy( g_StudioMdlContext.normal[ v_listdata[j].n ], vertex.normal );
 
-		vertex.boneweight.numbones		= g_StudioMdlContext.bone[ v_listdata[j].v ].numbones;
-		int k;
-		for( k = 0; k < MAXSTUDIOBONEWEIGHTS; k++ )
-		{
-			vertex.boneweight.bone[k]	= g_StudioMdlContext.bone[ v_listdata[j].v ].bone[k];
-			vertex.boneweight.weight[k]	= g_StudioMdlContext.bone[ v_listdata[j].v ].weight[k];
-		}
+		vertex.boneweight = g_StudioMdlContext.bone[ v_listdata[j].v ];
 
+		int k;
 		for (k = 0; k < numValidTexcoords; ++k)
 		{
 			Vector2Copy(g_StudioMdlContext.texcoord[k][v_listdata[j].t[k]], vertex.texcoord[k]);

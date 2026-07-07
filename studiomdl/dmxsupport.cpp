@@ -368,9 +368,9 @@ LoadVertices(CDmeDag *pDmeDag, CDmeVertexData *pBindState, const matrix3x4_t &ma
     int nCount = positions.Count();
 
     int nJointCount = pBindState->HasSkinningData() ? pBindState->JointCount() : 0;
-    if (nJointCount > MAXSTUDIOBONEWEIGHTS) {
+    if (nJointCount > MAXSTUDIOSRCBONEWEIGHTS) {
         MdlWarning("Mesh \"%s\" has %d bone influences per vertex (max %d) - reducing to top %d by weight\n",
-                   pDmeDag ? pDmeDag->GetName() : "<unknown>", nJointCount, MAXSTUDIOBONEWEIGHTS, MAXSTUDIOBONEWEIGHTS);
+                   pDmeDag ? pDmeDag->GetName() : "<unknown>", nJointCount, MAXSTUDIOSRCBONEWEIGHTS, MAXSTUDIOSRCBONEWEIGHTS);
     }
 
     if (nJointCount <= 0 && nBoneAssign == s_nDefaultRootNode && pDmeDag) {
@@ -402,7 +402,9 @@ LoadVertices(CDmeDag *pDmeDag, CDmeVertexData *pBindState, const matrix3x4_t &ma
             memcpy(pWeightBuf, pJointWeights, nJointCount * sizeof(float));
             memcpy(pIndexBuf, pJointIndices, nJointCount * sizeof(int));
 
-            int nBoneCount = SortAndBalanceBones(nJointCount, MAXSTUDIOBONEWEIGHTS, pIndexBuf, pWeightBuf);
+            // keep up to the source-stage cap; the clip to MAXSTUDIOBONEWEIGHTS
+            // happens after bone collapse (BalanceGlobalBoneWeights)
+            int nBoneCount = SortAndBalanceBones(nJointCount, MAXSTUDIOSRCBONEWEIGHTS, pIndexBuf, pWeightBuf);
             int nBoneIndex = -1;
 
             g_StudioMdlContext.bone[g_StudioMdlContext.numverts].numbones = nBoneCount;

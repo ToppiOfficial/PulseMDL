@@ -6179,10 +6179,10 @@ static void InitRemappedVertex(s_source_t *pSource, matrix3x4_t *pDestBoneToWorl
     vdest.Init();
     ndest.Init();
 
-    // clamp to the per-vertex weight limit; a corrupt count would read past bone[]/weight[]
+    // clamp to the source-stage capacity; a corrupt count would read past bone[]/weight[]
     int nNumBones = srcVertex.boneweight.numbones;
-    if (nNumBones > MAXSTUDIOBONEWEIGHTS)
-        nNumBones = MAXSTUDIOBONEWEIGHTS;
+    if (nNumBones > MAXSTUDIOSRCBONEWEIGHTS)
+        nNumBones = MAXSTUDIOSRCBONEWEIGHTS;
 
     int n;
     for (n = 0; n < nNumBones; n++) {
@@ -9067,9 +9067,10 @@ void ApplyMoveWeightQueue() {
             for (int j = 0; j < pSource->m_GlobalVertices.Count(); j++) {
                 s_boneweight_t &bw = pSource->m_GlobalVertices[j].boneweight;
 
-                // numbones bounds the bone[]/weight[] loops (MAXSTUDIOBONEWEIGHTS); a
-                // corrupt value would walk off the end - skip rather than crash
-                if (bw.numbones < 0 || bw.numbones > MAXSTUDIOBONEWEIGHTS)
+                // numbones bounds the bone[]/weight[] loops (MAXSTUDIOSRCBONEWEIGHTS
+                // capacity here - the clip to MAXSTUDIOBONEWEIGHTS runs after this);
+                // a corrupt value would walk off the end - skip rather than crash
+                if (bw.numbones < 0 || bw.numbones > MAXSTUDIOSRCBONEWEIGHTS)
                     continue;
 
                 // only touch vertices influenced by the moved bone
@@ -9141,7 +9142,7 @@ void ApplyMoveWeightQueue() {
                 } else if (wKeep <= 1.0e-6f) {
                     // full transfer, residual absent: it inherits the target's slot
                     bw.bone[slot] = r;
-                } else if (bw.numbones < MAXSTUDIOBONEWEIGHTS) {
+                } else if (bw.numbones < MAXSTUDIOSRCBONEWEIGHTS) {
                     // partial transfer, residual absent: split the slot, add a new one
                     bw.weight[slot] = wKeep;
                     bw.bone[bw.numbones] = r;
@@ -9166,6 +9167,30 @@ void ApplyMoveWeightQueue() {
     }
 
     g_moveWeightQueue.RemoveAll();
+}
+
+//-----------------------------------------------------------------------------
+// Final per-vertex weight clip. Source vertices carry up to
+// MAXSTUDIOSRCBONEWEIGHTS influences so CollapseBones/RemapVerticesToGlobalBones
+// merge collapsed helper-bone weights into their parents first; only now, with
+// the influence set final, reduce to the MAXSTUDIOBONEWEIGHTS hardware limit.
+// SortAndBalanceBones applies the same rules the loaders used (drop
+// <STUDIO_MIN_BONE_WEIGHT noise, keep the heaviest, renormalize to 1.0) -
+// deferring the clip to after the collapse means helpers no longer compete
+// with real deform bones for the 3 slots and their weight lands on the
+// surviving parent, not on whatever happened to win the pre-collapse clip.
+//-----------------------------------------------------------------------------
+static void BalanceGlobalBoneWeights() {
+    for (int i = 0; i < g_numsources; i++) {
+        s_source_t *pSource = g_source[i];
+        for (int j = 0; j < pSource->m_GlobalVertices.Count(); j++) {
+            s_boneweight_t &bw = pSource->m_GlobalVertices[j].boneweight;
+            if (bw.numbones <= 0 || bw.numbones > MAXSTUDIOSRCBONEWEIGHTS)
+                continue;
+            bw.numbones = SortAndBalanceBones(bw.numbones, MAXSTUDIOBONEWEIGHTS,
+                                              bw.bone.data(), bw.weight.data());
+        }
+    }
 }
 
 //-----------------------------------------------------------------------------
@@ -9266,6 +9291,11 @@ void SimplifyModel() {
 
     // reassign vertex weight lost on moved bones to their residual bone
     ApplyMoveWeightQueue();
+
+    // collapsed-bone weights are now merged into their parents (and any
+    // $transformbindposebone transfers applied): clip each vertex to the
+    // MAXSTUDIOBONEWEIGHTS hardware limit and renormalize
+    BalanceGlobalBoneWeights();
 
     if (g_StudioMdlContext.centerBonesOnVerts) {
         CenterBonesOnVerts();

@@ -88,6 +88,17 @@ class CDmeCombinationOperator;
 //   animation         MAXSTUDIOANIMS (8192)     3000
 //-----------------------------------------------------------------------------
 #define MAXSTUDIOBONEWEIGHTS    3
+// Source-stage per-vertex influence capacity. Loaders keep up to this many
+// weights (culling only <STUDIO_MIN_BONE_WEIGHT noise) so bone collapse can
+// merge helper-bone weights into their parents BEFORE the clip to the
+// MAXSTUDIOBONEWEIGHTS hardware limit (BalanceGlobalBoneWeights, simplify.cpp).
+// Clipping at load time made soon-to-collapse helpers compete with real bones
+// for the 3 slots, discarding legitimate influences.
+#define MAXSTUDIOSRCBONEWEIGHTS 16
+// Minimum significant per-vertex influence: weights below this fraction of the
+// normalized total are culled by SortAndBalanceBones (at load and in the final
+// post-collapse clip).
+#define STUDIO_MIN_BONE_WEIGHT  0.0001f
 #define MAXSTUDIOCMDS            128
 #define MAXSTUDIOMOVEKEYS        64
 #define MAXSTUDIOIKRULES        64
@@ -216,8 +227,8 @@ struct s_trianglevert_t {
 
 struct s_boneweight_t {
     int numbones;
-    std::array<int, MAXSTUDIOBONEWEIGHTS> bone;
-    std::array<float, MAXSTUDIOBONEWEIGHTS> weight;
+    std::array<int, MAXSTUDIOSRCBONEWEIGHTS> bone;
+    std::array<float, MAXSTUDIOSRCBONEWEIGHTS> weight;
 };
 
 struct s_tmpface_t {

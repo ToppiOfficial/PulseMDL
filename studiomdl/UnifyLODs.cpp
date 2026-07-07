@@ -391,8 +391,11 @@ bool CompareBoneWeightsFuzzy(const s_boneweight_t &b1, const s_boneweight_t &b2,
     // This is a list of which bones that exist in b1 also exist in b2.
     // Use the index to figure out where in the array for b2 that the corresponding bone in b1 is.
     int nMatchingBones = 0;
-    int pBoneIndexMap1[MAX_NUM_BONES_PER_VERT];
-    int pBoneIndexMap2[MAX_NUM_BONES_PER_VERT];
+    // sized to the source-stage capacity: normally these hold at most
+    // MAXSTUDIOBONEWEIGHTS entries by the time UnifyLODs runs, but indexing is
+    // bounded by numbones, which can legally reach the larger cap
+    int pBoneIndexMap1[MAXSTUDIOSRCBONEWEIGHTS];
+    int pBoneIndexMap2[MAXSTUDIOSRCBONEWEIGHTS];
 
     int i;
     for (i = 0; i < b2.numbones; ++i) {
