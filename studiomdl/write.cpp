@@ -2729,7 +2729,11 @@ static void WriteModel(studiohdr_t *phdr) {
 
         byte *pModelStart = (byte *) (&pmodel[i]);
 
-        strcpy(pmodel[i].name, g_model[i]->filename);
+        // Prefer the $rendermesh alias over the shared source filename so bodygroup
+        // submodels stay distinguishable in SFM / decompilers.
+        const char *pszModelName = (g_model[i]->rendermesh_name[0] != '\0')
+            ? g_model[i]->rendermesh_name : g_model[i]->filename;
+        Q_strncpy(pmodel[i].name, pszModelName, sizeof(pmodel[i].name));
         // AddToStringTable( &pmodel[i], &pmodel[i].sznameindex, g_model[i]->filename );
 
         // pmodel[i].mrmbias = g_model[i]->mrmbias;
