@@ -3451,6 +3451,15 @@ void CollapseBones() {
         if (g_bonetable[k].bDontCollapse)
             continue;
 
+        // $nocollapsebones keeps every non-DmeMesh bone; "onlyweights" softens
+        // it to keep only mesh-influencing bones (special bones survive below).
+        if (g_StudioMdlContext.no_collapse_bones && !g_bonetable[k].bIsMeshDag) {
+            if (!g_StudioMdlContext.no_collapse_bones_only_weights)
+                continue;
+            if (g_bonetable[k].flags & BONE_USED_BY_VERTEX_MASK)
+                continue;
+        }
+
         int sBoneFlags = g_bonetable[k].flags;
 
         char szBoneReport[512] = "";
@@ -4198,8 +4207,17 @@ void TagUsedBones() {
             }
         }
 
-        if (g_StudioMdlContext.no_collapse_bones && psource->isActiveModel) {
+        // "onlyweights" opts out of this blanket keep: weightless, non-special
+        // bones fall through to the normal cull (mesh/special bones survive on
+        // their own flags).
+        if (g_StudioMdlContext.no_collapse_bones && !g_StudioMdlContext.no_collapse_bones_only_weights
+            && psource->isActiveModel) {
             for (j = 0; j < psource->numbones; j++) {
+                // Skip DmeMesh transform dags (exporter noise); $donotcollapse
+                // can still force-keep one by name.
+                if (psource->localBone[j].bIsMeshDag)
+                    continue;
+
                 psource->boneflags[j] |= BONE_USED_BY_ATTACHMENT;
             }
         }
@@ -4393,6 +4411,7 @@ int BuildGlobalBonetable() {
                     g_bonetable[k].parent = -1;
                 g_bonetable[k].bonecontroller = 0;
                 g_bonetable[k].flags = psource->boneflags[j];
+                g_bonetable[k].bIsMeshDag = psource->localBone[j].bIsMeshDag;
 
                 if (g_bonetable[k].parent == -1 || !g_bonetable[g_bonetable[k].parent].bPreAligned) {
                     AngleMatrix(pSourceAnim->rawanim[0][j].rot, pSourceAnim->rawanim[0][j].pos,
@@ -4423,6 +4442,10 @@ int BuildGlobalBonetable() {
 
             // accumlate flags
             g_bonetable[k].flags |= psource->boneflags[j];
+
+            // a bone only stays a mesh dag if every source that has it agrees
+            if (!psource->localBone[j].bIsMeshDag)
+                g_bonetable[k].bIsMeshDag = false;
         }
     }
 
@@ -5610,9 +5633,9 @@ void RemapBones() {
         }
     }
 
-    if (!g_StudioMdlContext.no_collapse_bones) {
-        CollapseBones();
-    }
+    // runs even with $nocollapsebones: CollapseBones() then only collapses
+    // DmeMesh transform dags, which are noise rather than real joints
+    CollapseBones();
 
 
     if (g_StudioMdlContext.numbones > 256) {

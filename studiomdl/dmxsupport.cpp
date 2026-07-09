@@ -1276,17 +1276,13 @@ AddDagJoint(CDmeModel *pModel, CDmeDag *pDag, std::array<s_node_t,MAXSTUDIOSRCBO
         }
     }
 
-    // Parse jigglebones only for real model-body loads. A DMX used solely as an
-    // $animation/$sequence/$collision/$staticproppose source must not leak its
-    // jigglebones into the model (they register into the g_jigglebones[] globals).
-    // A $rendermesh clone with "nojigglebones" suppresses them too.
+    // Model-body loads only; else animation/sequence/collision sources leak
+    // jigglebones into g_jigglebones[]. "nojigglebones" suppresses them too.
     if (LoadingModelBody() && !g_bRenderMeshSuppressJiggleBones)
         HandleDmeJiggleBone(pDag);
 
-    // Procedural driver/look-at bones authored directly in the DMX skeleton.
-    // Gated to real model-body loads so an $animation/$sequence/$collision
-    // source DMX never leaks procedural rules into the model. A $rendermesh
-    // clone with "noproceduralbones" suppresses them too.
+    // Model-body loads only, so other source DMX doesn't leak procedural rules.
+    // "noproceduralbones" suppresses them too.
     if (LoadingModelBody() && !g_bRenderMeshSuppressProceduralBones) {
         HandleDmeQuatInterpBone(pDag);
         HandleDmeAimAtBone(pDag);
@@ -1294,6 +1290,7 @@ AddDagJoint(CDmeModel *pModel, CDmeDag *pDag, std::array<s_node_t,MAXSTUDIOSRCBO
 
     Q_strncpy(pNodes[nJointIndex].name, pDag->GetName(), sizeof(pNodes[nJointIndex].name));
     pNodes[nJointIndex].parent = nParentIndex;
+    pNodes[nJointIndex].bIsMeshDag = (CastElement<CDmeMesh>(pDag->GetShape()) != nullptr);
 
     // Now deal with children
     for (int i = 0; i < pDag->GetChildCount(); ++i) {
@@ -1318,6 +1315,7 @@ static int LoadSkeleton(CDmeDag *pRoot, CDmeModel *pModel, std::array<s_node_t,M
     for (int i = 0; i < MAXSTUDIOSRCBONES; ++i) {
         pNodes[i].name[0] = 0;
         pNodes[i].parent = -1;
+        pNodes[i].bIsMeshDag = false;
         boneMap.m_pnDmeModelToMdl[i] = -1;
         boneMap.m_pnMdlToDmeModel[i] = -1;
         boneMap.m_ppTransforms[i] = nullptr;

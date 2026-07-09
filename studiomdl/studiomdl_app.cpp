@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *PULSE_MDL_VERSION = "0.5.5";
+static const char *PULSE_MDL_VERSION = "0.5.6";
 
 extern StudioMdlContext g_StudioMdlContext;
 

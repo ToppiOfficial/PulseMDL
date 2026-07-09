@@ -4851,6 +4851,15 @@ void Cmd_CollapseBones() {
 
 void Cmd_NoCollapseBones() {
     g_StudioMdlContext.no_collapse_bones = true;
+
+    if (TokenAvailable()) {
+        GetToken(false);
+        if (!Q_stricmp(token, "onlyweights")) {
+            g_StudioMdlContext.no_collapse_bones_only_weights = true;
+        } else {
+            MdlWarning("$nocollapsebones: unknown option \"%s\" (expected \"onlyweights\")\n", token);
+        }
+    }
 }
 
 void Cmd_AlwaysCollapse() {
@@ -7797,6 +7806,7 @@ void Load_ProceduralBones() {
 //-----------------------------------------------------------------------------
 // $rendermesh - filter helpers
 //-----------------------------------------------------------------------------
+// Toppi: Holy sh*t this is long...
 
 static s_source_t *CloneSourceGeometry(s_source_t *pOrig) {
     if (g_numsources >= MAXSTUDIOSEQUENCES)
@@ -7934,6 +7944,11 @@ static void RebuildGeometryFromKeepMask(s_source_t *pSource, const CUtlVector<bo
         vertRemap.SetSize(numV);
         for (int i = 0; i < numV; i++) vertRemap[i] = -1;
 
+        // s_face_t.d is a real vertex only on subd quads; on triangles it stays
+        // calloc'd 0 (== 0xFFFFFFFF sentinel), so exclude both, else vertex 0 of
+        // every filtered-out mesh leaks through.
+        auto isQuadD = [](uint32_t d) { return d != 0 && d != 0xFFFFFFFFu; };
+
         for (int fi = fOffset; fi < fOffset + numF; fi++) {
             if (!keepFace[fi]) continue;
             auto mark = [&](uint32_t v) {
@@ -7943,7 +7958,8 @@ static void RebuildGeometryFromKeepMask(s_source_t *pSource, const CUtlVector<bo
             mark(pSource->face[fi].a);
             mark(pSource->face[fi].b);
             mark(pSource->face[fi].c);
-            mark(pSource->face[fi].d);
+            if (isQuadD(pSource->face[fi].d))
+                mark(pSource->face[fi].d);
         }
 
         int newVStart = newVerts.Count();
@@ -7967,7 +7983,8 @@ static void RebuildGeometryFromKeepMask(s_source_t *pSource, const CUtlVector<bo
             nf.a = remap(pSource->face[fi].a);
             nf.b = remap(pSource->face[fi].b);
             nf.c = remap(pSource->face[fi].c);
-            nf.d = remap(pSource->face[fi].d);
+            // preserve the triangle sentinel (0 or 0xFFFFFFFF) instead of remapping it
+            nf.d = isQuadD(pSource->face[fi].d) ? remap(pSource->face[fi].d) : pSource->face[fi].d;
             newFaces.AddToTail(nf);
             if (!pSource->m_FaceDmeMeshIdx.IsEmpty())
                 newFaceDmeMeshIdx.AddToTail(pSource->m_FaceDmeMeshIdx[fi]);

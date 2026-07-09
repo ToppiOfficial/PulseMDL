@@ -295,6 +295,7 @@ struct s_bonetable_t {
     int surfacePropIndex;
     Quaternion qAlignment;
     bool bDontCollapse;
+    bool bIsMeshDag;    // every contributing source flagged this bone as a DmeMesh transform dag
     Vector posrange;
 };
 EXTERN    std::array<s_bonetable_t, MAXSTUDIOSRCBONES> g_bonetable;
@@ -504,6 +505,9 @@ EXTERN int g_nummouths;
 struct s_node_t {
     char name[MAXSTUDIONAME];
     int parent;
+    // dag carries a DmeMesh shape (mesh transform node, not a real joint);
+    // exempt from the $nocollapsebones force-keep so it still culls/collapses
+    bool bIsMeshDag = false;
 };
 
 struct s_bone_t {
@@ -2052,6 +2056,10 @@ struct StudioMdlContext {
     unsigned parseable_completion_output: 1;
     unsigned collapse_bones_message: 1;
     unsigned no_collapse_bones: 1;
+    // $nocollapsebones onlyweights: soften the force-keep so weightless,
+    // non-special bones still collapse/cull (only mesh-influencing + special
+    // bones are protected). Only meaningful when no_collapse_bones is set.
+    unsigned no_collapse_bones_only_weights: 1;
     unsigned quiet: 1;
     unsigned checkLengths: 1;
     unsigned printBones: 1;
@@ -2158,6 +2166,7 @@ struct StudioMdlContext {
             : parseable_completion_output(0),
               collapse_bones_message(0),
               no_collapse_bones(0),
+              no_collapse_bones_only_weights(0),
               quiet(0),
               checkLengths(0),
               printBones(0),
