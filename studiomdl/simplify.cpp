@@ -3418,6 +3418,20 @@ static bool BoneIsProceduralParent(char const *pname) {
     return false;
 }
 
+// True if $alwayscollapse names this bone (and $donotcollapse does not, which
+// wins). Lets $alwayscollapse overrule the blanket $nocollapsebones keep.
+bool BoneIsAlwaysCollapse(char const *pname) {
+    for (int k = 0; k < g_DoNotCollapse.Count(); k++) {
+        if (stricmp(g_DoNotCollapse[k], pname) == 0)
+            return false;
+    }
+    for (int k = 0; k < g_collapse.Count(); k++) {
+        if (stricmp(g_collapse[k], pname) == 0)
+            return true;
+    }
+    return false;
+}
+
 bool BoneShouldCollapse(char const *pname) {
     // $donotcollapse force-keeps a bone; checked first so it wins over $alwayscollapse
     for (int k = 0; k < g_DoNotCollapse.Count(); k++) {
@@ -3453,7 +3467,9 @@ void CollapseBones() {
 
         // $nocollapsebones keeps every non-DmeMesh bone; "onlyweights" softens
         // it to keep only mesh-influencing bones (special bones survive below).
-        if (g_StudioMdlContext.no_collapse_bones && !g_bonetable[k].bIsMeshDag) {
+        // $alwayscollapse on a bone overrules the blanket keep.
+        if (g_StudioMdlContext.no_collapse_bones && !g_bonetable[k].bIsMeshDag
+            && !BoneIsAlwaysCollapse(g_bonetable[k].name)) {
             if (!g_StudioMdlContext.no_collapse_bones_only_weights)
                 continue;
             if (g_bonetable[k].flags & BONE_USED_BY_VERTEX_MASK)
@@ -4216,6 +4232,11 @@ void TagUsedBones() {
                 // Skip DmeMesh transform dags (exporter noise); $donotcollapse
                 // can still force-keep one by name.
                 if (psource->localBone[j].bIsMeshDag)
+                    continue;
+
+                // $alwayscollapse overrules the blanket keep (the $donotcollapse
+                // loop above already re-tagged any bone in both lists).
+                if (BoneIsAlwaysCollapse(psource->localBone[j].name))
                     continue;
 
                 psource->boneflags[j] |= BONE_USED_BY_ATTACHMENT;

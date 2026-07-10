@@ -12,10 +12,10 @@ Primarily tested with `DMX model 18`. Older versions may still work.
 |---|---|
 | Garry's Mod | ✅ Fully Supported |
 | Left 4 Dead 2 | ✅ Fully Supported |
-| Half-Life 2 | 🟡 Partially tested |
-| Counter-Strike: Source | ❌ Untested |
+| Half-Life 2 | ✅ Fully Supported |
+| Counter-Strike: Source | 🟡 Partially tested |
 | Team Fortress 2 | ❌ Untested |
-| Source Filmmaker | 🟡 Partially tested |
+| Source Filmmaker | ✅ Fully Supported |
 | Portal 1 & 2 | ❌ Untested |
 
 ## Features & Changes

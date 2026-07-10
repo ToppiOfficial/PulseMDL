@@ -11,6 +11,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 #include <algorithm>
@@ -551,10 +552,10 @@ public:
             return nullptr;
         }
         if (!HullIsValidForIVP(res)) {
-            fprintf(stderr, "minicollision: convex hull (%d verts, %d tris) is not a closed "
-                    "manifold or exceeds IVP limits - skipping convex piece\n",
+            fprintf(stderr, "minicollision: ERROR - convex hull (%d verts, %d tris) is not a closed "
+                    "manifold or exceeds IVP limits - aborting collision compile\n",
                     (int)res.vertices.size(), (int)res.indices.size() / 3);
-            return nullptr;
+            exit(1);
         }
         CPhysConvexImpl* c = new CPhysConvexImpl();
         c->hull = std::move(res);

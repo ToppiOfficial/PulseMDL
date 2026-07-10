@@ -2056,9 +2056,6 @@ struct StudioMdlContext {
     unsigned parseable_completion_output: 1;
     unsigned collapse_bones_message: 1;
     unsigned no_collapse_bones: 1;
-    // $nocollapsebones onlyweights: soften the force-keep so weightless,
-    // non-special bones still collapse/cull (only mesh-influencing + special
-    // bones are protected). Only meaningful when no_collapse_bones is set.
     unsigned no_collapse_bones_only_weights: 1;
     unsigned quiet: 1;
     unsigned checkLengths: 1;
