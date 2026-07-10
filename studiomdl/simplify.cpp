@@ -2872,6 +2872,21 @@ int findGlobalBoneXSI(const char *name) {
     return -1;
 }
 
+
+// Procedural-bone name resolution honoring the per-bone strict-name flag.
+// strict=true (QC $driverbone/$driverlookat) requires the exact skeleton bone name;
+// strict=false (.vrd / DMX) keeps the XSI dot-suffix match, so skeleton
+// "ValveBiped.Bip01_L_Hand" still resolves a short "Bip01_L_Hand".
+int findProcBone(const char *name, bool strict) {
+    return strict ? findGlobalBone(name) : findGlobalBoneXSI(name);
+}
+
+bool IsProcBone(const char *name, const char *bonename, bool strict) {
+    if (strict)
+        return !Q_stricmp(RenameBone(name), bonename);
+    return IsGlobalBoneXSI(name, bonename);
+}
+
 //-----------------------------------------------------------------------------
 // Purpose: Acculumate quaternions and try to find the swept area of rotation 
 //			so that a "midpoint" of the rotation area can be found
@@ -3286,13 +3301,13 @@ bool BoneIsProcedural(char const *pname) {
         }
 
         for (k = 0; k < g_numquatinterpbones; k++) {
-            if (IsGlobalBoneXSI(g_quatinterpbones[k].bonename, pname)) {
+            if (IsProcBone(g_quatinterpbones[k].bonename, pname, g_quatinterpbones[k].strictname)) {
                 return true;
             }
         }
 
         for (k = 0; k < g_numaimatbones; k++) {
-            if (IsGlobalBoneXSI(g_aimatbones[k].bonename, pname)) {
+            if (IsProcBone(g_aimatbones[k].bonename, pname, g_aimatbones[k].strictname)) {
                 return true;
             }
         }
@@ -3368,8 +3383,8 @@ static bool BoneIsProceduralControl(char const *pname) {
 
 // Returns true if pname (a global bonetable name) is the current hierarchy parent
 // of the named global bone.
-static bool BoneIsParentOfGlobalBone(char const *pname, char const *childname) {
-    int child = findGlobalBoneXSI(childname);
+static bool BoneIsParentOfGlobalBone(char const *pname, char const *childname, bool strict) {
+    int child = findProcBone(childname, strict);
     if (child == -1)
         return false;
     int parent = g_bonetable[child].parent;
@@ -3384,35 +3399,35 @@ static bool BoneIsProceduralParent(char const *pname) {
     for (int k = 0; k < g_numaxisinterpbones; k++) {
         if (findGlobalBone(g_axisinterpbones[k].bonename) == -1)
             continue; // procedural bone optimized out; parents needn't be kept
-        if (BoneIsParentOfGlobalBone(pname, g_axisinterpbones[k].bonename))
+        if (BoneIsParentOfGlobalBone(pname, g_axisinterpbones[k].bonename, false))
             return true;
-        if (BoneIsParentOfGlobalBone(pname, g_axisinterpbones[k].controlname))
+        if (BoneIsParentOfGlobalBone(pname, g_axisinterpbones[k].controlname, false))
             return true;
     }
     for (int k = 0; k < g_numquatinterpbones; k++) {
         s_quatinterpbone_t *pInterp = &g_quatinterpbones[k];
-        if (findGlobalBoneXSI(pInterp->bonename) == -1)
+        if (findProcBone(pInterp->bonename, pInterp->strictname) == -1)
             continue;
         // explicit parents (.vrd <helper>); empty for $driverbone / DMX (auto-resolved)
-        if (pInterp->parentname[0] && IsGlobalBoneXSI(pInterp->parentname, pname))
+        if (pInterp->parentname[0] && IsProcBone(pInterp->parentname, pname, pInterp->strictname))
             return true;
-        if (pInterp->controlparentname[0] && IsGlobalBoneXSI(pInterp->controlparentname, pname))
+        if (pInterp->controlparentname[0] && IsProcBone(pInterp->controlparentname, pname, pInterp->strictname))
             return true;
-        if (BoneIsParentOfGlobalBone(pname, pInterp->bonename))
+        if (BoneIsParentOfGlobalBone(pname, pInterp->bonename, pInterp->strictname))
             return true;
-        if (BoneIsParentOfGlobalBone(pname, pInterp->controlname))
+        if (BoneIsParentOfGlobalBone(pname, pInterp->controlname, pInterp->strictname))
             return true;
     }
     for (int k = 0; k < g_numaimatbones; k++) {
         s_aimatbone_t *pAimAt = &g_aimatbones[k];
-        if (findGlobalBoneXSI(pAimAt->bonename) == -1)
+        if (findProcBone(pAimAt->bonename, pAimAt->strictname) == -1)
             continue;
-        if (pAimAt->parentname[0] && IsGlobalBoneXSI(pAimAt->parentname, pname))
+        if (pAimAt->parentname[0] && IsProcBone(pAimAt->parentname, pname, pAimAt->strictname))
             return true;
-        if (BoneIsParentOfGlobalBone(pname, pAimAt->bonename))
+        if (BoneIsParentOfGlobalBone(pname, pAimAt->bonename, pAimAt->strictname))
             return true;
         // aim target may be a bone (attachment targets are kept via BoneHasAttachments)
-        if (IsGlobalBoneXSI(pAimAt->aimname, pname))
+        if (IsProcBone(pAimAt->aimname, pname, pAimAt->strictname))
             return true;
     }
     return false;
@@ -4723,10 +4738,15 @@ void TagProceduralBones() {
     // look for QuatInterp bone definitions
     int numquatinterpbones = 0;
     for (j = 0; j < g_numquatinterpbones; j++) {
-        g_quatinterpbones[j].bone = findGlobalBoneXSI(g_quatinterpbones[j].bonename);
-        g_quatinterpbones[j].control = findGlobalBoneXSI(g_quatinterpbones[j].controlname);
+        g_quatinterpbones[j].bone = findProcBone(g_quatinterpbones[j].bonename, g_quatinterpbones[j].strictname);
+        g_quatinterpbones[j].control = findProcBone(g_quatinterpbones[j].controlname, g_quatinterpbones[j].strictname);
 
         if (g_quatinterpbones[j].bone == -1) {
+            // $driverbone: the named bone must exist in the model skeleton, no silent skip.
+            if (g_quatinterpbones[j].strictname) {
+                MdlError("$driverbone: helper bone \"%s\" not found in the model skeleton\n",
+                         g_quatinterpbones[j].bonename);
+            }
             if (!g_StudioMdlContext.quiet && !g_StudioMdlContext.createMakefile) {
                 printf("quatinterpbone \"%s\" unused\n", g_quatinterpbones[j].bonename);
             }
@@ -4777,9 +4797,14 @@ void TagProceduralBones() {
     // look for AimAt bone definitions
     int numaimatbones = 0;
     for (j = 0; j < g_numaimatbones; j++) {
-        g_aimatbones[j].bone = findGlobalBoneXSI(g_aimatbones[j].bonename);
+        g_aimatbones[j].bone = findProcBone(g_aimatbones[j].bonename, g_aimatbones[j].strictname);
 
         if (g_aimatbones[j].bone == -1) {
+            // $driverlookat: the named bone must exist in the model skeleton, no silent skip.
+            if (g_aimatbones[j].strictname) {
+                MdlError("$driverlookat: helper bone \"%s\" not found in the model skeleton\n",
+                         g_aimatbones[j].bonename);
+            }
             if (!g_StudioMdlContext.quiet && !g_StudioMdlContext.createMakefile) {
                 printf("<aimconstraint> \"%s\" unused\n", g_aimatbones[j].bonename);
             }
@@ -4787,7 +4812,7 @@ void TagProceduralBones() {
         }
 
         if (g_aimatbones[j].parentname[0] != '\0') {
-            g_aimatbones[j].parent = findGlobalBoneXSI(g_aimatbones[j].parentname);
+            g_aimatbones[j].parent = findProcBone(g_aimatbones[j].parentname, g_aimatbones[j].strictname);
             if (g_aimatbones[j].parent == -1) {
                 MdlError("Missing parent control bone \"%s\" for procedural bone \"%s\"\n",
                          g_aimatbones[j].parentname, g_aimatbones[j].bonename);
@@ -4813,7 +4838,7 @@ void TagProceduralBones() {
         }
 
         if (g_aimatbones[j].aimAttach == -1) {
-            g_aimatbones[j].aimBone = findGlobalBoneXSI(g_aimatbones[j].aimname);
+            g_aimatbones[j].aimBone = findProcBone(g_aimatbones[j].aimname, g_aimatbones[j].strictname);
 
             if (g_aimatbones[j].aimBone == -1) {
                 MdlError("Missing aim control attachment or bone \"%s\" for procedural bone \"%s\"\n",
@@ -5018,8 +5043,8 @@ void RemapProceduralBones() {
     for (j = 0; j < g_numquatinterpbones; j++) {
         s_quatinterpbone_t *pInterp = &g_quatinterpbones[g_quatinterpbonemap[j]];
 
-        int origParent = findGlobalBoneXSI(pInterp->parentname);
-        int origControlParent = findGlobalBoneXSI(pInterp->controlparentname);
+        int origParent = findProcBone(pInterp->parentname, pInterp->strictname);
+        int origControlParent = findProcBone(pInterp->controlparentname, pInterp->strictname);
 
         // Empty parentname means a root bone ($driverbone auto-populate left it blank).
         // findGlobalBoneXSI("") returns -1, which matches g_bonetable[bone].parent == -1 for root.
@@ -5133,7 +5158,7 @@ void RemapProceduralBones() {
     for (j = 0; j < g_numaimatbones; j++) {
         s_aimatbone_t *pAimAtBone = &g_aimatbones[g_aimatbonemap[j]];
 
-        int origParent = findGlobalBoneXSI(pAimAtBone->parentname);
+        int origParent = findProcBone(pAimAtBone->parentname, pAimAtBone->strictname);
 
         // Empty parentname = root bone or $driverlookat auto-derived parent; allow -1.
         if (origParent == -1 && pAimAtBone->parentname[0] != '\0') {

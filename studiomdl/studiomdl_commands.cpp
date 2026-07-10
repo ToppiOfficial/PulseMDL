@@ -8673,6 +8673,7 @@ void Cmd_DriverBone() {
 
         s_quatinterpbone_t *pBone = &g_quatinterpbones[g_numquatinterpbones];
         memset(pBone, 0, sizeof(*pBone));
+        pBone->strictname = true; // $driverbone: require the full skeleton bone name
         Q_strncpy(pBone->bonename,    helperBoneNames[h], MAXSTUDIONAME);
         Q_strncpy(pBone->controlname, driverBoneName,     MAXSTUDIONAME);
 
@@ -8820,6 +8821,7 @@ void Cmd_DriverLookAt() {
         s_aimatbone_t *pAimAt = &g_aimatbones[g_numaimatbones];
         memset(pAimAt, 0, sizeof(*pAimAt));
 
+        pAimAt->strictname = true; // $driverlookat: require the full skeleton bone name
         Q_strncpy(pAimAt->bonename,  helperBoneNames[h], MAXSTUDIONAME);
         pAimAt->parentname[0] = '\0';  // auto-resolved from skeleton in simplify.cpp
         Q_strncpy(pAimAt->aimname,   aimTargetName,      MAXSTUDIONAME);
@@ -9468,6 +9470,7 @@ MDLCommand_t g_Commands[] =
                 {"$rendermesh",                       Cmd_RenderMesh,},
                 {"$driverbone",                       Cmd_DriverBone,},
                 {"$driverlookat",                     Cmd_DriverLookAt,},
+                {"$driveraimat",                      Cmd_DriverLookAt,}, // alias for $driverlookat
                 {"$elif",                             Cmd_Elif,},
                 {"$else",                             Cmd_Else,},
                 {"$case",                             Cmd_Case,},

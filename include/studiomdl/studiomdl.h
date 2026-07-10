@@ -1470,6 +1470,9 @@ struct s_quatinterpbone_t {
     // If true, pos[]/quat[] hold deltas relative to the triggerpose bind pose.
     // simplify.cpp remaps them onto the actual skeleton bind pose from g_bonetable.
     bool unlockbones;
+    // QC $driverbone: match the exact skeleton bone name (no XSI dot-suffix strip).
+    // .vrd / DMX leave this false, keeping the "Bip01_L_Hand" == "ValveBiped.Bip01_L_Hand" match.
+    bool strictname;
 };
 
 EXTERN int g_numquatinterpbones;
@@ -1489,6 +1492,8 @@ struct s_aimatbone_t {
     Vector upvector;
     Vector basepos;
     bool autobasepos; // true: seed basepos from skeleton rest pose in TagProceduralBones
+    // QC $driverlookat: match the exact skeleton bone name (no XSI dot-suffix strip).
+    bool strictname;
 };
 
 EXTERN int g_numaimatbones;
