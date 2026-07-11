@@ -442,6 +442,10 @@ struct s_attachment_t {
 // compile-only marker (never written to the .mdl): attachment came from a source DMX/SMD
 // rather than an explicit QC command. $staticproppose strips these on skeleton collapse.
 #define IS_FROM_SOURCE     0x0004
+// compile-only marker (never written to the .mdl): slot reserved by $declareattachment to
+// pin its index order. Anchored slots keep their declared position and are exempt from the
+// source-attachment reorder even when later filled by a DMX/SMD attachment.
+#define IS_DECLARED        0x0008
 
 EXTERN std::array<s_attachment_t, MAXSTUDIOSRCBONES> g_attachment;
 EXTERN int g_numattachments;

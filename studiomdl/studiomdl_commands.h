@@ -10,6 +10,8 @@
 s_source_t *FindCachedSource(const char *name, const char *xext);
 void AddBodyFlexData(s_source_t *pSource, int imodel);
 void AddBodyAttachments(s_source_t *pSource);
+// Move DMX/DME source-derived attachments after QC-authored ones (call after ParseScript).
+void ReorderSourceAttachmentsLast();
 void AddBodyFlexRules(s_source_t *pSource);
 // Clears all flex/facial data from a source and sets bNoAutoDMXRules; returns flex keys stripped.
 int StripSourceFlexData(s_source_t *pSource);

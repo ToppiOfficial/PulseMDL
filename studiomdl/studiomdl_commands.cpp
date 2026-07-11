@@ -716,6 +716,17 @@ void Cmd_Body() {
     DestroyElement(pSourceSkin);
 }
 
+// $declareattachment reserves a named slot to pin attachment index order. Returns the
+// index of an unfilled declared slot matching 'name' (bonename still empty), else -1.
+static int FindDeclaredAttachmentSlot(const char *name) {
+    for (int i = 0; i < g_numattachments; ++i) {
+        if ((g_attachment[i].type & IS_DECLARED) && g_attachment[i].bonename[0] == '\0' &&
+            !stricmp(g_attachment[i].name, name))
+            return i;
+    }
+    return -1;
+}
+
 #ifdef MDLCOMPILE
 //-----------------------------------------------------------------------------
 // Add attachments from the s_source_t that aren't already present in the
@@ -766,20 +777,82 @@ void AddBodyAttachments( s_source_t *pSource )
 //-----------------------------------------------------------------------------
 void AddBodyAttachments(s_source_t *pSource) {
     for (int i = 0; i < pSource->m_Attachments.Count(); ++i) {
-        if (g_numattachments >= g_attachment.size()) {
-            MdlWarning("Too Many Attachments (Max %d), Ignoring Attachment %s:%s\n",
-                       g_attachment.size(), pSource->filename, pSource->m_Attachments[i].name);
-            continue;;
+        // Fill a matching $declareattachment slot in place to honor its pinned ordering;
+        // otherwise append to the end (reordered after QC attachments later).
+        int slot = FindDeclaredAttachmentSlot(pSource->m_Attachments[i].name);
+        if (slot < 0) {
+            if (g_numattachments >= g_attachment.size()) {
+                MdlWarning("Too Many Attachments (Max %d), Ignoring Attachment %s:%s\n",
+                           g_attachment.size(), pSource->filename, pSource->m_Attachments[i].name);
+                continue;;
+            }
+            slot = g_numattachments++;
         }
 
-        memcpy(&g_attachment[g_numattachments], &(pSource->m_Attachments[i]), sizeof(s_attachment_t));
+        int declared = g_attachment[slot].type & IS_DECLARED; // preserve the anchor marker
+        memcpy(&g_attachment[slot], &(pSource->m_Attachments[i]), sizeof(s_attachment_t));
         // mark as source-derived so $staticproppose can strip it on skeleton collapse
-        g_attachment[g_numattachments].type |= IS_FROM_SOURCE;
-        ++g_numattachments;
+        g_attachment[slot].type |= IS_FROM_SOURCE | declared;
     }
 }
 
 #endif
+
+//-----------------------------------------------------------------------------
+// Stable-partition g_attachment so that floating DMX/DME source-derived attachments
+// (IS_FROM_SOURCE, merged during $body/$model) always follow QC-authored ones,
+// regardless of QC command order. $declareattachment anchors (IS_DECLARED) keep their
+// pinned position among the QC group even when filled by a source attachment. Relative
+// order within each group is kept. Unfilled declared placeholders are dropped. Stored
+// attachment indices are remapped through the permutation.
+//-----------------------------------------------------------------------------
+void ReorderSourceAttachmentsLast() {
+    if (g_numattachments <= 0)
+        return;
+
+    static std::array<s_attachment_t, MAXSTUDIOSRCBONES> reordered; // ~192KB, keep off the stack
+    int oldToNew[MAXSTUDIOSRCBONES];
+    for (int i = 0; i < g_numattachments; ++i)
+        oldToNew[i] = -1;
+    int n = 0;
+
+    // Pass 0: pinned attachments (QC-authored + $declareattachment anchors), order kept.
+    // Pass 1: floating source attachments, appended after.
+    for (int pass = 0; pass < 2; ++pass) {
+        bool wantFloating = (pass == 1);
+        for (int i = 0; i < g_numattachments; ++i) {
+            bool floating = (g_attachment[i].type & IS_FROM_SOURCE) && !(g_attachment[i].type & IS_DECLARED);
+            if (floating != wantFloating)
+                continue;
+            // Drop a declared slot that never received a real definition (no bone).
+            if ((g_attachment[i].type & IS_DECLARED) && g_attachment[i].bonename[0] == '\0') {
+                MdlWarning("$declareattachment \"%s\": never defined, dropping\n", g_attachment[i].name);
+                continue;
+            }
+            reordered[n] = g_attachment[i];
+            oldToNew[i] = n;
+            ++n;
+        }
+    }
+
+    for (int i = 0; i < n; ++i)
+        g_attachment[i] = reordered[i];
+    g_numattachments = n; // shrinks if unfilled declared placeholders were dropped
+
+    // Fix up stored indices that reference g_attachment slots (-1 => slot was dropped).
+    if (g_illumpositionattachment > 0)
+        g_illumpositionattachment = oldToNew[g_illumpositionattachment - 1] + 1;
+
+    for (int a = 0; a < g_numattachmentbyverts; ++a)
+        g_attachmentbyverts[a].attachIndex = oldToNew[g_attachmentbyverts[a].attachIndex];
+
+    for (int s = 0; s < g_sequence.Count(); ++s) {
+        for (int p = 0; p < 2; ++p) {
+            if (g_sequence[s].paramattachment[p] >= 0)
+                g_sequence[s].paramattachment[p] = oldToNew[g_sequence[s].paramattachment[p]];
+        }
+    }
+}
 
 static int FindFlexControllerByName(const char *name) {
     for (int i = 0; i < g_numflexcontrollers; ++i) {
@@ -3170,7 +3243,41 @@ void Cmd_RedefineAttachment() {
 }
 
 void Cmd_Attachment() {
+    // If $declareattachment reserved a slot for this name, fill it in place to honor the
+    // pinned ordering; otherwise append at the end.
+    if (!g_StudioMdlContext.createMakefile) {
+        GetToken(false);
+        int slot = FindDeclaredAttachmentSlot(token);
+        UnGetToken();
+        if (slot >= 0) {
+            Internal_Cmd_Attachment(slot);
+            return;
+        }
+    }
     Internal_Cmd_Attachment(g_numattachments);
+}
+
+//-----------------------------------------------------------------------------
+// $declareattachment <name>: reserve an ordering slot for an attachment so its final
+// index is pinned at this position, like $declaresequence. The real definition (a QC
+// $attachment or a DMX/DME source attachment of the same name) fills the slot in place,
+// letting a DMX attachment sit between two QC attachments. Useful when a game/mod
+// references attachments by index rather than by name.
+//-----------------------------------------------------------------------------
+void Cmd_DeclareAttachment() {
+    if (g_StudioMdlContext.createMakefile)
+        return;
+
+    GetToken(false);
+
+    if (g_numattachments >= (int)g_attachment.size())
+        TokenError("$declareattachment: too many attachments\n");
+
+    s_attachment_t &att = g_attachment[g_numattachments];
+    memset(&att, 0, sizeof(att));
+    strcpyn(att.name, token);
+    att.type |= IS_DECLARED;
+    g_numattachments++;
 }
 
 void Cmd_Renamebone() {
@@ -9389,6 +9496,7 @@ MDLCommand_t g_Commands[] =
                 {"$contents",                        Cmd_Contents,},
                 {"$jointcontents",                   Cmd_JointContents,},
                 {"$attachment",                      Cmd_Attachment,},
+                {"$declareattachment",               Cmd_DeclareAttachment,},
                 {"$attachmentbyverts",               Cmd_AttachmentByVerts,},
                 {"$redefineattachment",              Cmd_RedefineAttachment,},
                 {"$bonemerge",                       Cmd_BoneMerge,},

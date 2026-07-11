@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *PULSE_MDL_VERSION = "0.5.8";
+static const char *PULSE_MDL_VERSION = "0.5.9";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -745,6 +745,9 @@ int CStudioMDLApp::Main() {
 
     extern void ReportUnusedRenderMeshDefs();
     ReportUnusedRenderMeshDefs();
+
+    // Ensure DMX/DME source attachments are ordered after QC $attachment entries.
+    ReorderSourceAttachmentsLast();
 
     if (!g_StudioMdlContext.createMakefile) {
         // Rebuild isActiveModel from actual model->source references so that $rendermesh
