@@ -2,8 +2,6 @@
 
 ![status](https://img.shields.io/badge/status-beta-yellow) ![platform](https://img.shields.io/badge/platform-Windows%20x64-lightgray)
 
-> **Experimental**
-
 A modified standalone fork of Valve's StudioMDL compiler, focused on advanced character modding workflows (facial flexes, procedural bones, bodygroup variants, proportion rigs).
 
 Primarily tested with `DMX model 18`. Older versions may still work.
