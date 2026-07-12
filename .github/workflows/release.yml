@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -62,8 +64,8 @@ jobs:
             $version = $m.Groups[1].Value
             $tag = "v$version"
           }
-          # Release title is "PulseMDL v<version>".
-          $title = "PulseMDL $tag"
+          # Release title is just the version tag.
+          $title = "$tag"
           "tag=$tag"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           "title=$title" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Version: $title (tag: $tag)"
@@ -81,12 +83,32 @@ jobs:
           path: pulsemdl-${{ steps.ver.outputs.tag }}-win64.zip
           if-no-files-found: error
 
+      - name: Build release notes
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.ver.outputs.tag }}"
+          # Most recent existing tag, excluding this one.
+          $prev = git tag --sort=-v:refname | Where-Object { $_ -ne $tag } | Select-Object -First 1
+          $range = if ($prev) { "$prev..HEAD" } else { "HEAD" }
+          # Commit bodies since the previous release: %b drops each commit's
+          # subject line, so single-line commits contribute nothing. Filter
+          # "bump version" noise, drop blank lines, sort case-insensitively.
+          $notes = git log --pretty=format:'%b' $range |
+            Where-Object { $_ -notmatch 'bump version' } |
+            ForEach-Object { $_.TrimEnd() } |
+            Where-Object { $_ -notmatch '^\s*$' } |
+            Sort-Object
+          if (-not ($notes -join '' -replace '\s', '')) { $notes = "Release $tag" }
+          ($notes -join "`n") | Out-File -FilePath release-notes.md -Encoding utf8
+          Get-Content release-notes.md
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.title }}
-          generate_release_notes: true
+          draft: true
+          body_path: release-notes.md
           files: |
             pulsemdl-${{ steps.ver.outputs.tag }}-win64.zip
