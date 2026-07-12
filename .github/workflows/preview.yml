@@ -1,4 +1,4 @@
-name: Preview
+name: Dev Release
 
 on:
   workflow_dispatch: {}
@@ -38,27 +38,32 @@ jobs:
       - name: Package zip
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/* -DestinationPath "pulsemdl-preview-win64.zip" -Force
+          Compress-Archive -Path dist/* -DestinationPath "pulsemdl-dev-win64.zip" -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pulsemdl-preview-win64
-          path: pulsemdl-preview-win64.zip
+          name: pulsemdl-dev-win64
+          path: pulsemdl-dev-win64.zip
           if-no-files-found: error
 
-      - name: Move rolling preview tag
-        shell: pwsh
+      - name: Delete existing dev release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          git tag -f preview
-          git push origin preview --force
+          gh release delete "dev" --yes --cleanup-tag 2>/dev/null || true
 
-      - name: Publish preview pre-release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: preview
-          name: "PulseMDL Preview (latest)"
-          prerelease: true
-          body: "Rolling preview build from commit ${{ github.sha }}. This release is overwritten on every preview run; do not rely on this link for stable downloads."
-          files: |
-            pulsemdl-preview-win64.zip
+      - name: Create dev pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          COMMIT_URL="https://github.com/${{ github.repository }}/commit/${{ github.sha }}"
+          NOTES=$(printf '> [!WARNING]\n> This is an automated dev build. It may be unstable, contain hidden bugs, or introduce breaking changes. Use at your own risk.\n\n**Commit:** %s\n\n%s' "${COMMIT_URL}" "${COMMIT_MSG}")
+          gh release create "dev" \
+            "pulsemdl-dev-win64.zip" \
+            --title "dev" \
+            --notes "${NOTES}" \
+            --prerelease
