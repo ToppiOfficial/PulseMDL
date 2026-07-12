@@ -166,6 +166,7 @@ public:
 		char  rendermesh[128];
 		float concavity;
 		int   maxHulls;
+		bool  forceHulls;       // treat maxHulls as an exact target, not just a cap
 		int   maxVerts;         // max vertices per generated convex hull (detail/poly count)
 		float weightThreshold;  // ($generatejoint) min bone weight a vertex must have
 		                        // to be included; 0 = include any vertex touching the bone
@@ -1441,7 +1442,7 @@ void CJointedModel::ProcessGenerateRequests()
 			}
 
 			CUtlVector<DecomposedHull> hulls;
-			if ( !DecomposeConvex( verts, tris, req.concavity, req.maxHulls, req.maxVerts, hulls ) )
+			if ( !DecomposeConvex( verts, tris, req.concavity, req.maxHulls, req.forceHulls, req.maxVerts, hulls ) )
 			{
 				MdlError( "$generatejoint: convex decomposition failed for bone '%s' (mesh '%s').\n"
 					"Try a higher concavity or simpler/thicker source geometry.\n",
@@ -1523,7 +1524,7 @@ void CJointedModel::ProcessGenerateRequests()
 			}
 
 			CUtlVector<DecomposedHull> hulls;
-			if ( !DecomposeConvex( verts, tris, req.concavity, req.maxHulls, req.maxVerts, hulls ) )
+			if ( !DecomposeConvex( verts, tris, req.concavity, req.maxHulls, req.forceHulls, req.maxVerts, hulls ) )
 			{
 				MdlError( "$generate: convex decomposition failed for '%s'.\n"
 					"Try a higher concavity or simpler/thicker source geometry.\n", req.rendermesh );
@@ -1652,6 +1653,7 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 	req.rendermesh[0]    = '\0';
 	req.concavity        = 0.04f;
 	req.maxHulls         = 1;
+	req.forceHulls       = false;
 	req.maxVerts         = 16;
 	req.weightThreshold  = 0.42f;
 
@@ -1685,6 +1687,11 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 		{
 			if ( GetToken( false ) ) req.maxHulls = atoi( token );
 		}
+		else if ( !stricmp( token, "force" ) || !stricmp( token, "forcehulls" ) )
+		{
+			// Flag, no value: make maxHulls an exact target instead of a cap.
+			req.forceHulls = true;
+		}
 		else if ( !stricmp( token, "maxverts" ) || !stricmp( token, "verts" ) )
 		{
 			if ( GetToken( false ) ) req.maxVerts = atoi( token );
@@ -1704,7 +1711,9 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 	if ( req.maxHulls < 1 ) req.maxHulls = 1;
 	if ( req.maxHulls > 8 ) req.maxHulls = 8;
 	if ( req.maxVerts < 4 )   req.maxVerts = 4;
-	if ( req.maxVerts > 128 ) req.maxVerts = 128;
+	// Ceiling well under IVP's 4095-triangle / 65535-point ledge limits (a convex
+	// hull of V verts has 2V-4 tris): 512 verts -> ~1020 tris.  Default stays 16.
+	if ( req.maxVerts > 512 ) req.maxVerts = 512;
 	return true;
 }
 

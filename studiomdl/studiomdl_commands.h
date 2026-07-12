@@ -12,6 +12,8 @@ void AddBodyFlexData(s_source_t *pSource, int imodel);
 void AddBodyAttachments(s_source_t *pSource);
 // Move DMX/DME source-derived attachments after QC-authored ones (call after ParseScript).
 void ReorderSourceAttachmentsLast();
+// $nojigglebones: strip all jigglebones, $donotcollapse their bones (call after ParseScript).
+void StripJiggleBonesKeepBones();
 void AddBodyFlexRules(s_source_t *pSource);
 // Clears all flex/facial data from a source and sets bNoAutoDMXRules; returns flex keys stripped.
 int StripSourceFlexData(s_source_t *pSource);

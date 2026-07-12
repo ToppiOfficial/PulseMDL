@@ -117,6 +117,7 @@ class CDmeCombinationOperator;
 #define MAX_RENDERMESH_DEFS             512     // total $rendermesh definitions
 #define MAX_RENDERMESH_OVERRIDES        256     // per-def mesh overrides
 #define MAX_RENDERMESH_MATERIAL_REMOVES 256     // per-def material removals
+#define MAX_RENDERMESH_MATERIAL_WORDS   256     // per-def material substring removals
 #define MAX_RENDERMESH_FLEXCTRL_REMOVES 256     // per-def flex controller removals
 // Conditional ($if/$switch) stacking limits live in scriplib.h (libs/utils),
 // since that parsing lives below the studiomdl layer.
@@ -2102,6 +2103,7 @@ struct StudioMdlContext {
     unsigned cullMorphs: 1;
     unsigned bNoAutoDMXRulesGlobal: 1;  // $noautodmxrulesglobal: suppress auto DMX flex on every source
     unsigned bNoProceduralBonesGlobal: 1;  // $noproceduralbones: strip all axisinterp/quatinterp/aimat procedural bones
+    unsigned bNoJiggleBonesGlobal: 1;  // $nojigglebones: strip all jigglebones but $donotcollapse their bones
     int g_maxWarnings = -1;
     char g_path[1024];
 
@@ -2204,6 +2206,7 @@ struct StudioMdlContext {
               bContentRootRelative(0),
               bNoAutoDMXRulesGlobal(0),
               bNoProceduralBonesGlobal(0),
+              bNoJiggleBonesGlobal(0),
               minLod(0),
               numAllowedRootLODs(0),
               bHasModelName(0),

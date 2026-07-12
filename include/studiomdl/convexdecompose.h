@@ -26,14 +26,18 @@ struct DecomposedHull
 //   concavity   : quality knob in [0..1].  Lower = closer fit / more pieces,
 //                 higher = coarser / fewer pieces.  Maps to VHACD's volume
 //                 error tolerance.
-//   maxHulls    : hard cap on the number of output convex pieces (>=1).
+//   maxHulls    : cap on the number of output convex pieces (>=1).  By default a
+//                 suggestion only: the concavity threshold drives the natural
+//                 count and fewer pieces come out when the mesh needs fewer.
+//   forceHulls  : if true, split aggressively to hit maxHulls exactly (as far as
+//                 the geometry allows) instead of stopping early at concavity.
 //   maxVerts    : max vertices per output convex hull (detail / polygon count).
 //                 Lower = simpler hulls, easier for the physics packer to seal.
 //   out         : receives one DecomposedHull per produced convex piece.
 // Returns true if at least one hull was produced.
 bool DecomposeConvex( const CUtlVector<Vector> &verts,
                       const CUtlVector<int> &triIndices,
-                      float concavity, int maxHulls, int maxVerts,
+                      float concavity, int maxHulls, bool forceHulls, int maxVerts,
                       CUtlVector<DecomposedHull> &out );
 
 #endif // CONVEX_DECOMPOSE_H

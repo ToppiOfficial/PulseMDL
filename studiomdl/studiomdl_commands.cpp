@@ -41,6 +41,8 @@ struct s_rendermesh_def_t {
     int numOverrides;
     char removeMaterials[MAX_RENDERMESH_MATERIAL_REMOVES][MAXSTUDIONAME];
     int numRemoveMaterials;
+    char removeMaterialWords[MAX_RENDERMESH_MATERIAL_WORDS][MAXSTUDIONAME];
+    int numRemoveMaterialWords;
     char removeFlexControllers[MAX_RENDERMESH_FLEXCTRL_REMOVES][MAXSTUDIONAME];
     int numRemoveFlexControllers;
     bool noFacial;          // strip all flex controllers, flex rules and deltas from this clone
@@ -1693,35 +1695,54 @@ void Option_Flexcontroller(s_model_t *pmodel) {
 }
 
 void Option_NoAutoDMXRules(s_source_t *pSource) {
-    // The source flex was already stripped at load (pre-scanned in Option_Studio); this just
-    // re-confirms the flag. For the old global behavior use $noautodmxrulesglobal.
+    // Source flex already stripped at load (pre-scanned in Option_Studio); just re-confirm the flag.
     pSource->bNoAutoDMXRules = true;
 }
 
-// $noautodmxrulesglobal - legacy escape hatch reproducing the old global noautodmxrules side
-// effect. The previous implementation zeroed g_numflexcontrollers outright, which also wiped
-// QC-defined $flexcontrollers and left their $flexrules dangling (crash). Instead it now sets a
-// global flag so every source's AddBodyFlexData/AddBodyFlexRules skips the auto DMX controllers,
-// remaps, and combination rules, while QC flex (and the source morph deltas) stay intact. Acts
-// on sources processed after this command, so place it before the $body/$model blocks.
+// $noautodmxrulesglobal - legacy: skip auto DMX flex on every source (AddBodyFlexData/Rules),
+// QC flex and source morph deltas stay. Acts on sources processed after it - place before $body.
 void Cmd_NoAutoDMXRulesGlobal() {
     g_StudioMdlContext.bNoAutoDMXRulesGlobal = true;
 }
 
-// $noproceduralbones - global switch that compiles the model with no procedural
-// (axisinterp / quatinterp / aimat) bones. It removes any that were already parsed
-// - whether authored in the QC ($driverbone / $driverlookat) or loaded from a
-// source DMX (DmeQuatInterpBone / DmeAimAtBone) - and, because it also sets a
-// forward-acting flag re-checked in TagProceduralBones(), it strips any parsed
-// after this command too, so placement in the QC does not matter. Jigglebones are
-// a separate procedural type and are unaffected (use the $rendermesh "nojigglebones"
-// option or omit them at the source).
+// $noproceduralbones - strip all axisinterp/quatinterp/aimat bones (QC or source DMX). A
+// forward-acting flag re-checked in TagProceduralBones() also strips any parsed after it, so
+// placement does not matter. Jigglebones are a separate type (see $nojigglebones).
 void Cmd_NoProceduralBones() {
     g_StudioMdlContext.bNoProceduralBonesGlobal = true;
     // Remove anything already parsed so far.
     g_numaxisinterpbones = 0;
     g_numquatinterpbones = 0;
     g_numaimatbones = 0;
+}
+
+// $nojigglebones - strip every jigglebone but keep its bone via $donotcollapse, for a
+// procedural-bones-only compile that retains the (inert) jigglebone skeleton (e.g. SFM). Strip
+// runs post-parse in StripJiggleBonesKeepBones() so QC/DMX order does not matter.
+void Cmd_NoJiggleBones() {
+    g_StudioMdlContext.bNoJiggleBonesGlobal = true;
+}
+
+// Deferred worker for $nojigglebones; called after ParseScript(), before SimplifyModel().
+void StripJiggleBonesKeepBones() {
+    if (!g_StudioMdlContext.bNoJiggleBonesGlobal)
+        return;
+
+    for (int i = 0; i < g_numjigglebones; i++) {
+        const char *pname = g_jigglebones[i].bonename;
+
+        bool exists = false;
+        for (int k = 0; k < g_DoNotCollapse.Count(); k++) {
+            if (!stricmp(g_DoNotCollapse[k], pname)) {
+                exists = true;
+                break;
+            }
+        }
+        if (!exists)
+            g_DoNotCollapse.AddToTail(strdup(pname));
+    }
+
+    g_numjigglebones = 0;
 }
 
 //-----------------------------------------------------------------------------
@@ -8203,6 +8224,22 @@ static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *p
                        pDef->name, pDef->removeMaterials[k], pSource->filename);
     }
 
+    // Warn for any removematerialword entry that matches no material base name (substring)
+    for (int k = 0; k < pDef->numRemoveMaterialWords; k++) {
+        bool found = false;
+        for (int m = 0; m < MAXSTUDIOSKINS && !found; m++) {
+            if (pSource->mesh[m].numfaces == 0) continue;
+            if (m >= g_nummaterials) continue;
+            char baseName[MAX_PATH];
+            Q_FileBase(g_texture[g_material[m]].name, baseName, sizeof(baseName));
+            if (V_stristr(baseName, pDef->removeMaterialWords[k]))
+                found = true;
+        }
+        if (!found)
+            MdlWarning("$rendermesh '%s': removematerialword '%s' not found in source '%s'\n",
+                       pDef->name, pDef->removeMaterialWords[k], pSource->filename);
+    }
+
     // Build keepFace mask: false for any face in a mesh slot whose material matches
     CUtlVector<bool> keepFace;
     keepFace.SetSize(pSource->numfaces);
@@ -8218,6 +8255,15 @@ static void ApplyMaterialRemoveFilter(s_source_t *pSource, s_rendermesh_def_t *p
         for (int k = 0; k < pDef->numRemoveMaterials && !remove; k++) {
             if (Q_stricmp(matName, pDef->removeMaterials[k]) == 0)
                 remove = true;
+        }
+        // removematerialword: case-insensitive substring match against the base name
+        if (!remove && pDef->numRemoveMaterialWords > 0) {
+            char baseName[MAX_PATH];
+            Q_FileBase(matName, baseName, sizeof(baseName));
+            for (int k = 0; k < pDef->numRemoveMaterialWords && !remove; k++) {
+                if (pDef->removeMaterialWords[k][0] && V_stristr(baseName, pDef->removeMaterialWords[k]))
+                    remove = true;
+            }
         }
         if (!remove) continue;
 
@@ -8265,13 +8311,10 @@ int StripSourceFlexData(s_source_t *pSource) {
     return nFlexKeys;
 }
 
-// $rendermesh removeflexcontroller: drop the named flex controller(s) from this clone while
-// keeping the morph/delta geometry and the rest of the flex rig intact. A flex controller is a
-// remap entry (m_FlexControllerRemaps, one per DMX combination-operator control / DmeControlInput);
-// removing it also drops the combination rules that were driven solely by it, because those rules
-// would otherwise reference a now-unmapped raw control and crash flex-rule generation. The morph
-// deltas the dropped rules pointed at (m_FlexKeys) stay, just undriven, so other controllers still
-// animate their own morphs. DMX expression flex rules (m_DmeFlexRules) are left untouched.
+// $rendermesh removeflexcontroller: drop the named flex controller(s) (m_FlexControllerRemaps)
+// plus the combination rules driven solely by them - those would otherwise reference an unmapped
+// raw control and crash flex-rule generation. Morph deltas (m_FlexKeys) and DMX expression rules
+// (m_DmeFlexRules) are kept.
 static void ApplyRemoveFlexControllerFilter(s_source_t *pSource, s_rendermesh_def_t *pDef) {
     // Collect the raw control names owned by the removed remaps so we can later drop the
     // combination rules that reference them (a raw control belongs to exactly one remap).
@@ -8400,7 +8443,7 @@ static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef)
     }
 
     // Apply material remove filter (works independently of DmeMesh tracking)
-    if (pDef->numRemoveMaterials > 0)
+    if (pDef->numRemoveMaterials > 0 || pDef->numRemoveMaterialWords > 0)
         ApplyMaterialRemoveFilter(pSource, pDef);
 
     // Drop individual flex controllers (keeps morphs and the rest of the rig). Skipped when
@@ -8469,6 +8512,12 @@ void Cmd_RenderMesh() {
             GetToken(false);
             Q_strncpy(def.removeMaterials[def.numRemoveMaterials], token, MAXSTUDIONAME);
             def.numRemoveMaterials++;
+        } else if (Q_stricmp(token, "removematerialword") == 0) {
+            if (def.numRemoveMaterialWords >= MAX_RENDERMESH_MATERIAL_WORDS)
+                MdlError("$rendermesh '%s': too many removematerialword entries (max %d)\n", def.name, MAX_RENDERMESH_MATERIAL_WORDS);
+            GetToken(false);
+            Q_strncpy(def.removeMaterialWords[def.numRemoveMaterialWords], token, MAXSTUDIONAME);
+            def.numRemoveMaterialWords++;
         } else if (Q_stricmp(token, "removeflexcontroller") == 0) {
             if (def.numRemoveFlexControllers >= MAX_RENDERMESH_FLEXCTRL_REMOVES)
                 MdlError("$rendermesh '%s': too many removeflexcontroller entries (max %d)\n", def.name, MAX_RENDERMESH_FLEXCTRL_REMOVES);
@@ -8494,10 +8543,11 @@ void Cmd_RenderMesh() {
         }
     }
 
-    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s, %d removematerial%s, %d removeflexcontroller%s%s%s%s%s%s)\n",
+    Msg("$rendermesh: defined '%s' -> '%s' (defaultState=%d, %d mesh override%s, %d removematerial%s, %d removematerialword%s, %d removeflexcontroller%s%s%s%s%s%s)\n",
         def.name, def.filename, (int)def.defaultState,
         def.numOverrides, def.numOverrides == 1 ? "" : "s",
         def.numRemoveMaterials, def.numRemoveMaterials == 1 ? "" : "s",
+        def.numRemoveMaterialWords, def.numRemoveMaterialWords == 1 ? "" : "s",
         def.numRemoveFlexControllers, def.numRemoveFlexControllers == 1 ? "" : "s",
         def.noFacial ? ", nofacial" : "",
         def.noJiggleBones ? ", nojigglebones" : "",
@@ -9561,6 +9611,7 @@ MDLCommand_t g_Commands[] =
                 {"$boneflexdriver",                  Cmd_BoneFlexDriver,},
                 {"$noautodmxrulesglobal",            Cmd_NoAutoDMXRulesGlobal,},
                 {"$noproceduralbones",               Cmd_NoProceduralBones,},
+                {"$nojigglebones",                   Cmd_NoJiggleBones,},
                 {"$modelbudget",                     Cmd_ModelBudget,},
                 {"$preservetriangleorder",           Cmd_PreserveTriangleOrder,},
                 {"$qcassert",                        Cmd_QCAssert,},

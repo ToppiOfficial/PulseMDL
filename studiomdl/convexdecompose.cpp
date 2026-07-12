@@ -32,7 +32,7 @@ namespace
 
 bool DecomposeConvex( const CUtlVector<Vector> &verts,
                       const CUtlVector<int> &triIndices,
-                      float concavity, int maxHulls, int maxVerts,
+                      float concavity, int maxHulls, bool forceHulls, int maxVerts,
                       CUtlVector<DecomposedHull> &out )
 {
 	out.RemoveAll();
@@ -97,13 +97,31 @@ bool DecomposeConvex( const CUtlVector<Vector> &verts,
 	if ( maxHulls < 1 ) maxHulls = 1;
 	params.m_maxConvexHulls = (uint32_t)maxHulls;
 
-	// Voxel budget is VHACD's master cost knob (default 400k = max quality).  Our
-	// hulls are capped coarse (maxHulls and maxVerts are small) and then re-hulled
-	// by minicollision, so the extra precision from a huge grid is discarded.  Scale
-	// the grid to the requested detail and cap at the old 400k default: high-detail
-	// requests keep their original behavior, coarse ones run on a much smaller grid.
-	uint32_t res = 60000u + (uint32_t)maxHulls * (uint32_t)maxVerts * 1500u;
-	params.m_resolution = ( res > 400000u ) ? 400000u : res;
+	// VHACD splits by the concavity threshold above, then merges down to
+	// m_maxConvexHulls only if it produced more (VHACD.h, PerformConvexDecomposition).
+	// It never pads *up* to the cap, so by default maxHulls is a suggestion: a mesh
+	// that seals within the concavity tolerance using fewer pieces yields fewer.
+	// forceHulls makes it an exact target - drive the volume error toward zero so
+	// VHACD keeps splitting past the concavity threshold until it has at least
+	// maxHulls pieces, which the merge step then trims back to exactly maxHulls.
+	// (A genuinely convex region still can't be split, so the target is a ceiling
+	// the geometry may not reach.)
+	if ( forceHulls && maxHulls > 1 )
+		params.m_minimumVolumePercentErrorAllowed = 0.0;
+
+	// Voxel resolution controls how faithfully VHACD captures the shape and where
+	// it places its split planes; it is INDEPENDENT of the per-hull vertex budget
+	// (m_maxNumVerticesPerCH above), which decimates each finished hull afterward
+	// via ShrinkWrap/QuickHull.  So VHACD already does "decompose high, then
+	// decimate to N verts" - the classic Blender collision workflow.  Tying the
+	// grid to maxVerts (the old formula) starved that first step: a low maxverts
+	// ran the whole decomposition on a coarse grid, yielding blocky, lopsided
+	// hulls that spent their vertex budget on the wrong region.  Run the grid at
+	// full detail regardless of the vertex cap; scale up with hull count (more
+	// pieces need a finer grid to separate cleanly), floored at VHACD's default.
+	uint32_t res = 400000u + (uint32_t)( maxHulls > 1 ? maxHulls - 1 : 0 ) * 100000u;
+	if ( res > 1000000u ) res = 1000000u;
+	params.m_resolution = res;
 
 	VHACD::IVHACD *pVHACD = VHACD::CreateVHACD();
 	if ( !pVHACD )
