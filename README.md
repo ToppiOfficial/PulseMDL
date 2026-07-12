@@ -1,10 +1,15 @@
 # PulseMDL
 
+![status](https://img.shields.io/badge/status-beta-yellow) ![platform](https://img.shields.io/badge/platform-Windows%20x64-lightgray)
+
 > **Experimental**
 
 A modified standalone fork of Valve's StudioMDL compiler, focused on advanced character modding workflows (facial flexes, procedural bones, bodygroup variants, proportion rigs).
 
 Primarily tested with `DMX model 18`. Older versions may still work.
+
+> [!IMPORTANT]
+> This project is still a work in progress. The codebase inherits a large amount of Valve's original StudioMDL source and still requires extensive cleanup of unused/dead code, and large portions are likely to be rewritten. Expect instability and breaking changes.
 
 ## Tested Source Engine Branch
  
