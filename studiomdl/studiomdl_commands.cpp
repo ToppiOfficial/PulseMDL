@@ -52,6 +52,7 @@ struct s_rendermesh_def_t {
     bool noAttachments;     // strip the clone's DMX attachment dags post-clone (per-source, cache-safe)
     bool used;
     s_source_t *pOwnedSource;
+    s_source_t *pCollisionSource; // bone+mesh-only owned source for $collisionmodel/$collisionjoints/$generate
 };
 
 static s_rendermesh_def_t g_rendermeshDefs[MAX_RENDERMESH_DEFS];
@@ -8564,27 +8565,17 @@ void ReportUnusedRenderMeshDefs() {
     }
 }
 
-//-----------------------------------------------------------------------------
-// Resolve a $rendermesh by name to its loaded, filtered geometry.
-//
-// Used by the collision auto-generation path ($generate / $generatejoint) so it
-// can decompose an already-filtered render mesh (DmeMesh isolate/exclude,
-// removematerial, nofacial) into convex collision.  Lazily loads and filters the
-// owned source on first use, exactly like ProcessOptionStudio does for $body.
-// Returns the shared owned source (do NOT free it); NULL if the name is unknown.
-//-----------------------------------------------------------------------------
-// Lazily loads, clones, and filters the underlying source for a $rendermesh definition,
-// caching the result in pDef->pOwnedSource. The raw source is always cloned immediately so
-// the underlying file's data is never mutated.
+// Lazily load, clone, and filter the underlying source for a $rendermesh, caching it in
+// pDef->pOwnedSource. Shared by $body (ProcessOptionStudio) and $generate. The raw source is
+// cloned immediately so the underlying file is never mutated; returns the shared owned source
+// (do NOT free it).
 static void EnsureRenderMeshOwnedSource(s_rendermesh_def_t *pDef, bool reverse) {
     if (pDef->pOwnedSource)
         return;
 
     g_bLoadingRenderMeshRaw = true;
-    // Suppress the DMX's jigglebone / hitbox parsing for this clone if requested. These are
-    // registered into model-global state during the raw parse (not stored per-source), so the
-    // filter has to run at load time rather than post-clone like nofacial. On a cache hit the
-    // parse is skipped and nothing is contributed anyway, so nothing needs suppressing.
+    // Jigglebones/hitboxes register into model-global state during the raw parse (not per-source),
+    // so suppression must happen at load time, not post-clone like nofacial.
     g_bRenderMeshSuppressJiggleBones = pDef->noJiggleBones;
     g_bRenderMeshSuppressHitboxes = pDef->noHitbox;
     g_bRenderMeshSuppressProceduralBones = pDef->noProceduralBones;
@@ -8601,16 +8592,6 @@ static void EnsureRenderMeshOwnedSource(s_rendermesh_def_t *pDef, bool reverse) 
     }
 }
 
-s_source_t *GetRenderMeshSource(const char *name) {
-    s_rendermesh_def_t *pDef = FindRenderMeshDef(name);
-    if (!pDef)
-        return nullptr;
-
-    EnsureRenderMeshOwnedSource(pDef, false);
-    pDef->used = true;
-    return pDef->pOwnedSource;
-}
-
 // Mark a $rendermesh as used without loading its geometry. Called at parse time by
 // consumers (e.g. $generate/$generatejoint) whose actual resolution happens after
 // ReportUnusedRenderMeshDefs() runs, so the def isn't falsely flagged as unused.
@@ -8618,6 +8599,48 @@ void MarkRenderMeshUsed(const char *name) {
     s_rendermesh_def_t *pDef = FindRenderMeshDef(name);
     if (pDef)
         pDef->used = true;
+}
+
+// Lazily build a bone+mesh-only owned source for the collision/generate paths, cached in
+// pDef->pCollisionSource. Unlike EnsureRenderMeshOwnedSource this always suppresses
+// jigglebones/hitboxes/procedural bones and strips flex (whatever the def's options), so nothing
+// leaks into the model when a render mesh doubles as collision. Kept separate from pOwnedSource so
+// forcing suppression here never affects a $body that shares the same $rendermesh.
+static void EnsureRenderMeshCollisionSource(s_rendermesh_def_t *pDef) {
+    if (pDef->pCollisionSource)
+        return;
+
+    // bUseCache=false: don't pick up a normally-loaded copy (with jigglebones etc.), and keep this
+    // owned source independent of the $body one.
+    g_bLoadingRenderMeshRaw = true;
+    g_bRenderMeshSuppressJiggleBones = true;
+    g_bRenderMeshSuppressHitboxes = true;
+    g_bRenderMeshSuppressProceduralBones = true;
+    s_source_t *pRaw = Load_Source(pDef->filename, "", false, false, /*bUseCache=*/false);
+    g_bRenderMeshSuppressJiggleBones = false;
+    g_bRenderMeshSuppressHitboxes = false;
+    g_bRenderMeshSuppressProceduralBones = false;
+    g_bLoadingRenderMeshRaw = false;
+
+    if (!pRaw)
+        return;
+
+    s_source_t *pOwned = CloneSourceGeometry(pRaw);
+    ApplyRenderMeshFilter(pOwned, pDef);   // mesh isolate/exclude, removematerial(word)
+    StripSourceFlexData(pOwned);           // bone + mesh only
+    pDef->pCollisionSource = pOwned;
+}
+
+// Resolve a $rendermesh to a bone+mesh-only clone for $collisionmodel/$collisionjoints/$generate.
+// Returns a fresh independent clone each call (callers may mutate it); NULL if not a $rendermesh.
+s_source_t *GetRenderMeshCollisionSource(const char *name) {
+    s_rendermesh_def_t *pDef = FindRenderMeshDef(name);
+    if (!pDef)
+        return nullptr;
+
+    EnsureRenderMeshCollisionSource(pDef);
+    pDef->used = true;
+    return pDef->pCollisionSource ? CloneSourceGeometry(pDef->pCollisionSource) : nullptr;
 }
 
 

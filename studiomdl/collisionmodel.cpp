@@ -1352,7 +1352,9 @@ void CJointedModel::ProcessGenerateRequests()
 	{
 		const generate_request_t &req = m_generateRequests[r];
 
-		s_source_t *pSrc = GetRenderMeshSource( req.rendermesh );
+		// Bone+mesh-only clone: $generate needs geometry+weights to decompose, never the
+		// source's flex/jigglebones/procedural bones (which must not leak into the model).
+		s_source_t *pSrc = GetRenderMeshCollisionSource( req.rendermesh );
 		if ( !pSrc )
 		{
 			MdlError( "$generate%s: unknown $rendermesh '%s' (define it with $rendermesh first).\n",
@@ -2042,7 +2044,11 @@ int DoCollisionModel( bool separateJoints )
 	}
 	else
 	{
-		s_source_t *pmodel = Load_Source( name, "", false, false, false );
+		// A $rendermesh name resolves to its filtered geometry (bone + mesh only, no
+		// flex/jigglebones/procedural bones); otherwise fall back to a file load.
+		s_source_t *pmodel = GetRenderMeshCollisionSource( name );
+		if ( !pmodel )
+			pmodel = Load_Source( name, "", false, false, false );
 		if ( !pmodel ) return 0;
 
 		if ( nummaterials && numtextures && (numtextures != g_numtextures || nummaterials != g_nummaterials) )

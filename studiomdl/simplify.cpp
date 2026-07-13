@@ -4024,11 +4024,14 @@ void MapFlexDriveBonesToGlobalBoneTable() {
 
         for (int j = 0; j < g_StudioMdlContext.numbones; ++j) {
             if (!Q_stricmp(g_bonetable[j].name, pDmeBoneFlexDriver->m_sBoneName.Get())) {
+                // Retail studiomdl refuses flex drivers on procedural bones. The MDL format
+                // has no procedural distinction and the engine resolves procedural bones
+                // before reading driver components, so it works - but Valve never officially
+                // supported it (e.g. a quatinterp bone's interpolated position driving a flex).
                 if (g_bonetable[j].flags & BONE_ALWAYS_PROCEDURAL) {
-                    MdlWarning("DmeBoneFlexDriver Bone: %s is marked procedural, Ignoring flex drivers\n",
+                    MdlWarning("DmeBoneFlexDriver Bone: %s is procedural - driving flexes from a "
+                               "procedural bone is not officially supported by the Source engine, use at your own risk\n",
                                pDmeBoneFlexDriver->m_sBoneName.Get());
-                    pDmeBoneFlexDriverList->m_eBoneFlexDriverList.Remove(i);
-                    pDmeBoneFlexDriver = NULL;
                 }
 
                 pDmeBoneFlexDriver->SetValue("__boneIndex", j);
@@ -4040,10 +4043,6 @@ void MapFlexDriveBonesToGlobalBoneTable() {
                 break;
             }
         }
-
-        // Was removed because it was referencing a procedural bone
-        if (!pDmeBoneFlexDriver)
-            continue;
 
         CDmAttribute *pBoneIndexAttr = pDmeBoneFlexDriver->GetAttribute("__boneIndex");
         if (pBoneIndexAttr) {

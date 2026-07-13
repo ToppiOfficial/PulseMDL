@@ -1702,9 +1702,10 @@ bool GetGlobalFilePath(const char *pSrc, char *pFullPath, int nMaxLen);
 s_source_t *Load_Source(const char *filename, const char *ext, bool reverse = false, bool isActiveModel = false,
                         bool bUseCache = true);
 
-// Resolve a $rendermesh definition by name to its loaded, filtered source geometry.
-// Returns a shared owned source (do not free); NULL if no such $rendermesh exists.
-s_source_t *GetRenderMeshSource(const char *name);
+// Resolve a $rendermesh to a bone+mesh-only clone for $collisionmodel/$collisionjoints/$generate:
+// jigglebones, hitboxes, procedural bones, and flex are all suppressed/stripped. Returns a
+// fresh independent clone each call; NULL if no such $rendermesh exists.
+s_source_t *GetRenderMeshCollisionSource(const char *name);
 
 // Mark a $rendermesh definition as used (without loading it), so deferred consumers
 // like $generate/$generatejoint don't trip the "defined but never used" warning.
