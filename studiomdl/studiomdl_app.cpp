@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *PULSE_MDL_VERSION = "0.6.1";
+static const char *PULSE_MDL_VERSION = "0.7.0";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -560,6 +560,7 @@ void UsageAndExit() {
              "[-nodx80] - skip dx80.vtx and sw.vtx output\n"
              "[-cullanims] - remove unreferenced $animations to reduce file size\n"
              "[-cullmorphs] - remove flex morphs not driven by any flexcontroller/flexrule/eyeball/mouth to reduce file size\n"
+             "[-cullflex] - remove flex rules and flex controllers that have no backing delta vertices (auto nofacial)\n"
              "[-collisionthreads <int>] - $generate/$generatejoint convex decomposition threads: <=1 single-threaded (deterministic), >=2 multithreaded (default 4)\n"
     );
 }
@@ -768,6 +769,14 @@ int CStudioMDLApp::Main() {
         StripJiggleBonesKeepBones();
 
         SimplifyModel();
+
+        // -cullflex: drop flex rules/controllers with no backing delta verts. Must
+        // run after SimplifyModel() populates g_flexkey[].numvanims and before write.
+        CullOrphanFlex();
+
+        // Compact g_flexdesc[] last: the two culls above shrink the referencing arrays
+        // but never renumber the desc space, so orphaned descs would otherwise still ship.
+        CullOrphanFlexDescs();
 
         ConsistencyCheckSurfaceProp();
         ConsistencyCheckContents();
@@ -1093,6 +1102,16 @@ bool CStudioMDLApp::ParseArguments() {
 
         if (!Q_stricmp(pArgv, "-cullmorphs")) {
             g_StudioMdlContext.cullMorphs = true;
+            continue;
+        }
+
+        if (!Q_stricmp(pArgv, "-cullflex")) {
+            g_StudioMdlContext.cullOrphanFlex = true;
+            continue;
+        }
+
+        if (!Q_stricmp(pArgv, "-nocullflexdesc")) {
+            g_StudioMdlContext.bNoCullFlexDesc = true;
             continue;
         }
 

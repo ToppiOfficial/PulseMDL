@@ -6938,6 +6938,377 @@ void CullUnreferencedFlexes()
 }
 
 //-----------------------------------------------------------------------------
+// Purpose: -cullflex. Remove flex rules and flex controllers that have no backing
+//          delta vertices, so a $rendermesh clone that dropped its facial geometry
+//          no longer leaves phantom sliders/rules behind (an auto "nofacial").
+//
+//   A flexdesc is live if some flexkey with real vertex deltas targets it, or an
+//   eyeball/mouth references it. A rule is live if its output desc is live (a live
+//   rule also keeps the descs it FETCH2s as inputs). A controller is live if a live
+//   rule references it, or it belongs to a surviving flex-controller remap. The rest
+//   is culled and the controller array compacted, remapping every controller index
+//   baked into the surviving rules' op streams and the remap UI records.
+//
+//   Runs after SimplifyModel() (so g_flexkey[].numvanims is populated - the same
+//   per-mesh delta signal write.cpp uses) and before write. Fail-safe: if a rule op
+//   stream does not match the expected shape, the whole cull is skipped.
+//-----------------------------------------------------------------------------
+
+// Visit every flex-controller index embedded in a rule's op stream, passing each
+// through fn (identity to collect, old->new to remap). NWAY/eyelid ops carry extra
+// controller indices in the CONST ops emitted immediately before them (see
+// Option_Flexrule expansion); those are validated here. Returns false on an
+// unexpected op layout so the caller can bail out safely.
+template <typename Fn>
+static bool VisitRuleControllerRefs( s_flexrule_t &rule, Fn fn )
+{
+    for ( int i = 0; i < rule.numops; i++ )
+    {
+        s_flexop_t &op = rule.op[i];
+        switch ( op.op )
+        {
+            case STUDIO_FETCH1:
+            case STUDIO_2WAY_0:
+            case STUDIO_2WAY_1:
+                op.d.index = fn( op.d.index );
+                break;
+
+            case STUDIO_NWAY:
+                // preceding CONST holds the value (multi) controller index
+                if ( i < 1 || rule.op[i - 1].op != STUDIO_CONST )
+                    return false;
+                op.d.index = fn( op.d.index );
+                rule.op[i - 1].d.value = (float)fn( (int)rule.op[i - 1].d.value );
+                break;
+
+            case STUDIO_DME_LOWER_EYELID:
+            case STUDIO_DME_UPPER_EYELID:
+                // op.d.index = CloseLidV; preceding 3 CONSTs = [i-3] EyesUpDown,
+                // [i-2] Blink, [i-1] CloseLid (EyesUpDown/Blink may be -1 = none)
+                if ( i < 3 || rule.op[i - 1].op != STUDIO_CONST
+                           || rule.op[i - 2].op != STUDIO_CONST
+                           || rule.op[i - 3].op != STUDIO_CONST )
+                    return false;
+                op.d.index = fn( op.d.index );
+                rule.op[i - 1].d.value = (float)fn( (int)rule.op[i - 1].d.value );
+                { int b = (int)rule.op[i - 2].d.value; if ( b >= 0 ) rule.op[i - 2].d.value = (float)fn( b ); }
+                { int e = (int)rule.op[i - 3].d.value; if ( e >= 0 ) rule.op[i - 3].d.value = (float)fn( e ); }
+                break;
+
+            default:
+                break;
+        }
+    }
+    return true;
+}
+
+void CullOrphanFlex()
+{
+    if ( !g_StudioMdlContext.cullOrphanFlex )
+        return;
+    if ( g_numflexrules == 0 && g_numflexcontrollers == 0 )
+        return;
+
+    // 1. live flexdescs: backed by delta verts, or referenced by an eyeball/mouth
+    bool descLive[MAXSTUDIOFLEXDESC] = { false };
+    auto MarkDesc = [&]( int d ) { if ( d >= 0 && d < MAXSTUDIOFLEXDESC ) descLive[d] = true; };
+
+    for ( int i = 0; i < g_numflexkeys; i++ )
+    {
+        if ( g_flexkey[i].numvanims <= 0 )
+            continue;
+        MarkDesc( g_flexkey[i].flexdesc );
+        if ( g_flexkey[i].flexpair > 0 )
+            MarkDesc( g_flexkey[i].flexpair );
+    }
+    for ( int i = 0; i < g_nummodels; i++ )
+    {
+        s_model_t *pmodel = g_model[i];
+        if ( !pmodel )
+            continue;
+        for ( int j = 0; j < pmodel->numeyeballs; j++ )
+        {
+            const s_eyeball_t &eye = pmodel->eyeball[j];
+            MarkDesc( eye.upperlidflexdesc );
+            MarkDesc( eye.lowerlidflexdesc );
+            for ( int k = 0; k < 3; k++ )
+            {
+                MarkDesc( eye.upperflexdesc[k] );
+                MarkDesc( eye.lowerflexdesc[k] );
+            }
+        }
+    }
+    for ( int i = 0; i < g_nummouths; i++ )
+        MarkDesc( g_mouth[i].flexdesc );
+
+    // 2. live rules (fixpoint): live if output desc is live; a live rule keeps every
+    //    desc it reads via FETCH2 as a live input, which can enable further rules.
+    bool ruleLive[MAXSTUDIOFLEXRULES] = { false };
+    bool changed = true;
+    while ( changed )
+    {
+        changed = false;
+        for ( int r = 0; r < g_numflexrules; r++ )
+        {
+            if ( ruleLive[r] )
+                continue;
+            const s_flexrule_t &rule = g_flexrule[r];
+            if ( rule.flex < 0 || rule.flex >= MAXSTUDIOFLEXDESC || !descLive[rule.flex] )
+                continue;
+            ruleLive[r] = true;
+            changed = true;
+            for ( int o = 0; o < rule.numops; o++ )
+                if ( rule.op[o].op == STUDIO_FETCH2 )
+                    MarkDesc( rule.op[o].d.index );
+        }
+    }
+
+    // 3. live controllers: referenced by a live rule
+    bool ctrlLive[MAXSTUDIOFLEXCTRL] = { false };
+    for ( int r = 0; r < g_numflexrules; r++ )
+    {
+        if ( !ruleLive[r] )
+            continue;
+        if ( !VisitRuleControllerRefs( g_flexrule[r],
+                 [&]( int c ) { if ( c >= 0 && c < g_numflexcontrollers ) ctrlLive[c] = true; return c; } ) )
+        {
+            MdlWarning( "-cullflex: unexpected flexrule op layout; skipping flex cull\n" );
+            return;
+        }
+    }
+
+    // 3b. keep each flex-controller remap whole: if any of its slider controllers is
+    //     live, keep them all (+ eyes/blink helpers) so its UI record stays valid.
+    for ( size_t k = 0; k < g_StudioMdlContext.FlexControllerRemap.size(); k++ )
+    {
+        const s_flexcontrollerremap_t &remap = g_StudioMdlContext.FlexControllerRemap[k];
+        int sliders[4] = { remap.m_Index, remap.m_LeftIndex, remap.m_RightIndex, remap.m_MultiIndex };
+        bool anyLive = false;
+        for ( int s = 0; s < 4; s++ )
+            if ( sliders[s] >= 0 && sliders[s] < g_numflexcontrollers && ctrlLive[sliders[s]] )
+                anyLive = true;
+        if ( !anyLive )
+            continue;
+        for ( int s = 0; s < 4; s++ )
+            if ( sliders[s] >= 0 && sliders[s] < g_numflexcontrollers )
+                ctrlLive[sliders[s]] = true;
+        if ( remap.m_EyesUpDownFlexController >= 0 && remap.m_EyesUpDownFlexController < g_numflexcontrollers )
+            ctrlLive[remap.m_EyesUpDownFlexController] = true;
+        if ( remap.m_BlinkController >= 0 && remap.m_BlinkController < g_numflexcontrollers )
+            ctrlLive[remap.m_BlinkController] = true;
+    }
+
+    // 4. compact live controllers, build old->new map
+    int ctrlMap[MAXSTUDIOFLEXCTRL];
+    int newCtrl = 0;
+    for ( int c = 0; c < g_numflexcontrollers; c++ )
+    {
+        if ( !ctrlLive[c] )
+        {
+            ctrlMap[c] = -1;
+            if ( !g_StudioMdlContext.quiet )
+                printf( "Culling orphan flex controller \"%s\"\n", g_flexcontroller[c].name );
+            continue;
+        }
+        ctrlMap[c] = newCtrl;
+        if ( newCtrl != c )
+            g_flexcontroller[newCtrl] = g_flexcontroller[c];
+        newCtrl++;
+    }
+    auto MapCtrl = [&]( int c ) { return ( c >= 0 && c < MAXSTUDIOFLEXCTRL ) ? ctrlMap[c] : c; };
+
+    // 5. remap + compact live rules (drop dead)
+    int newRule = 0;
+    for ( int r = 0; r < g_numflexrules; r++ )
+    {
+        if ( !ruleLive[r] )
+        {
+            if ( !g_StudioMdlContext.quiet )
+            {
+                const char *facs = ( g_flexrule[r].flex >= 0 && g_flexrule[r].flex < g_numflexdesc )
+                                       ? g_flexdesc[g_flexrule[r].flex].FACS : "?";
+                printf( "Culling orphan flex rule \"%s\"\n", facs );
+            }
+            continue;
+        }
+        VisitRuleControllerRefs( g_flexrule[r], MapCtrl );
+        if ( newRule != r )
+            g_flexrule[newRule] = g_flexrule[r];
+        newRule++;
+    }
+
+    // 6. remap surviving remap records, drop fully-dead ones
+    for ( size_t k = 0; k < g_StudioMdlContext.FlexControllerRemap.size(); )
+    {
+        s_flexcontrollerremap_t &remap = g_StudioMdlContext.FlexControllerRemap[k];
+        int mi = MapCtrl( remap.m_Index );
+        int li = MapCtrl( remap.m_LeftIndex );
+        int ri = MapCtrl( remap.m_RightIndex );
+        int mu = MapCtrl( remap.m_MultiIndex );
+        if ( mi < 0 && li < 0 && ri < 0 && mu < 0 )
+        {
+            g_StudioMdlContext.FlexControllerRemap.erase( g_StudioMdlContext.FlexControllerRemap.begin() + k );
+            continue;
+        }
+        remap.m_Index = mi;
+        remap.m_LeftIndex = li;
+        remap.m_RightIndex = ri;
+        remap.m_MultiIndex = mu;
+        remap.m_EyesUpDownFlexController = MapCtrl( remap.m_EyesUpDownFlexController );
+        remap.m_BlinkController = MapCtrl( remap.m_BlinkController );
+        k++;
+    }
+
+    int culledRules = g_numflexrules - newRule;
+    int culledCtrl = g_numflexcontrollers - newCtrl;
+    g_numflexrules = newRule;
+    g_numflexcontrollers = newCtrl;
+
+    if ( !g_StudioMdlContext.quiet && ( culledRules > 0 || culledCtrl > 0 ) )
+        printf( "Culled %d orphan flex rule(s) and %d flex controller(s).\n", culledRules, culledCtrl );
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: part of -cullmorphs (disable within it via -nocullflexdesc). Remove flexdescs
+//   that nothing references and compact g_flexdesc[], remapping every index that points
+//   into it. The morph/flex culls only shrink the referencing arrays (flexkeys, rules,
+//   controllers); they never renumber the desc space, so orphaned descs would otherwise
+//   still ship in the .mdl. Runs last, after CullUnreferencedFlexes()/CullOrphanFlex(), so
+//   it sees the final surviving set - a desc left dead by either cull is picked up here.
+//   (The engine treats desc indices as MDL-internal - RunFlexRules zeroes a dest[] sized to
+//   numflexdesc and its own FIXME says descs without rules should be stripped here.)
+//
+//   A desc is live if a surviving flexkey (flexdesc/flexpair), flexrule (output flex or a
+//   FETCH2 input), eyeball, or mouth references it. Slot 0 is always kept so the remap can
+//   never collapse a live flexpair onto index 0, which flexpair reads as "no pair".
+//-----------------------------------------------------------------------------
+void CullOrphanFlexDescs()
+{
+    if ( !g_StudioMdlContext.cullMorphs || g_StudioMdlContext.bNoCullFlexDesc || g_numflexdesc == 0 )
+        return;
+
+    bool descLive[MAXSTUDIOFLEXDESC] = { false };
+    auto MarkDesc = [&]( int d ) { if ( d >= 0 && d < MAXSTUDIOFLEXDESC ) descLive[d] = true; };
+
+    // keep slot 0 stable: a remapped flexpair must never become 0 (flexpair 0 == "no pair")
+    MarkDesc( 0 );
+
+    // A flexkey keeps its desc alive only if it has backing delta verts - the same gate
+    // CullOrphanFlex() uses. A mesh-filtered $rendermesh clone leaves vert-less flexkeys
+    // (numvanims == 0) whose rules/controllers -cullflex already stripped; those must not
+    // resurrect the desc here. write.cpp only emits a flex for a flexkey with verts, so a
+    // vert-less flexkey never references a written desc. The default flexkey is always kept.
+    for ( int i = 0; i < g_numflexkeys; i++ )
+    {
+        if ( g_flexkey[i].numvanims <= 0 && &g_flexkey[i] != g_defaultflexkey )
+            continue;
+        MarkDesc( g_flexkey[i].flexdesc );
+        if ( g_flexkey[i].flexpair > 0 )
+            MarkDesc( g_flexkey[i].flexpair );
+    }
+    for ( int r = 0; r < g_numflexrules; r++ )
+    {
+        const s_flexrule_t &rule = g_flexrule[r];
+        MarkDesc( rule.flex );
+        for ( int o = 0; o < rule.numops; o++ )
+            if ( rule.op[o].op == STUDIO_FETCH2 )
+                MarkDesc( rule.op[o].d.index );
+    }
+    for ( int i = 0; i < g_nummodels; i++ )
+    {
+        s_model_t *pmodel = g_model[i];
+        if ( !pmodel )
+            continue;
+        for ( int j = 0; j < pmodel->numeyeballs; j++ )
+        {
+            const s_eyeball_t &eye = pmodel->eyeball[j];
+            MarkDesc( eye.upperlidflexdesc );
+            MarkDesc( eye.lowerlidflexdesc );
+            for ( int k = 0; k < 3; k++ )
+            {
+                MarkDesc( eye.upperflexdesc[k] );
+                MarkDesc( eye.lowerflexdesc[k] );
+            }
+        }
+    }
+    for ( int i = 0; i < g_nummouths; i++ )
+        MarkDesc( g_mouth[i].flexdesc );
+
+    // compact live descs, build old->new map
+    int descMap[MAXSTUDIOFLEXDESC];
+    int newDesc = 0;
+    for ( int d = 0; d < g_numflexdesc; d++ )
+    {
+        if ( !descLive[d] )
+        {
+            descMap[d] = -1;
+            if ( !g_StudioMdlContext.quiet )
+                printf( "Culling orphan flex desc \"%s\"\n", g_flexdesc[d].FACS );
+            continue;
+        }
+        descMap[d] = newDesc;
+        if ( newDesc != d )
+            g_flexdesc[newDesc] = g_flexdesc[d];
+        newDesc++;
+    }
+
+    if ( newDesc == g_numflexdesc )
+        return; // nothing culled
+
+    int culled = g_numflexdesc - newDesc;
+    auto MapDesc = [&]( int d ) { return ( d >= 0 && d < g_numflexdesc ) ? descMap[d] : d; };
+
+    // remap every index that points into g_flexdesc[] (culled descs are unreferenced, so
+    // MapDesc never yields -1 here)
+    for ( int i = 0; i < g_numflexkeys; i++ )
+    {
+        // culled descs (-1) only ever come from vert-less flexkeys that emit no flex; leave
+        // the stale field untouched rather than stamp a -1 into it
+        int nd = MapDesc( g_flexkey[i].flexdesc );
+        if ( nd >= 0 )
+            g_flexkey[i].flexdesc = nd;
+        if ( g_flexkey[i].flexpair > 0 )
+        {
+            int np = MapDesc( g_flexkey[i].flexpair );
+            if ( np >= 0 )
+                g_flexkey[i].flexpair = np;
+        }
+    }
+    for ( int r = 0; r < g_numflexrules; r++ )
+    {
+        s_flexrule_t &rule = g_flexrule[r];
+        rule.flex = MapDesc( rule.flex );
+        for ( int o = 0; o < rule.numops; o++ )
+            if ( rule.op[o].op == STUDIO_FETCH2 )
+                rule.op[o].d.index = MapDesc( rule.op[o].d.index );
+    }
+    for ( int i = 0; i < g_nummodels; i++ )
+    {
+        s_model_t *pmodel = g_model[i];
+        if ( !pmodel )
+            continue;
+        for ( int j = 0; j < pmodel->numeyeballs; j++ )
+        {
+            s_eyeball_t &eye = pmodel->eyeball[j];
+            eye.upperlidflexdesc = MapDesc( eye.upperlidflexdesc );
+            eye.lowerlidflexdesc = MapDesc( eye.lowerlidflexdesc );
+            for ( int k = 0; k < 3; k++ )
+            {
+                eye.upperflexdesc[k] = MapDesc( eye.upperflexdesc[k] );
+                eye.lowerflexdesc[k] = MapDesc( eye.lowerflexdesc[k] );
+            }
+        }
+    }
+    for ( int i = 0; i < g_nummouths; i++ )
+        g_mouth[i].flexdesc = MapDesc( g_mouth[i].flexdesc );
+
+    g_numflexdesc = newDesc;
+
+    if ( !g_StudioMdlContext.quiet )
+        printf( "Culled %d orphan flex desc(s).\n", culled );
+}
+
+//-----------------------------------------------------------------------------
 // Purpose: allocate an entry for $animation
 //-----------------------------------------------------------------------------
 void Cmd_Animation() {

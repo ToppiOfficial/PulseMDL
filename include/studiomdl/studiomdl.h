@@ -2102,6 +2102,8 @@ struct StudioMdlContext {
     unsigned bNoWarnings: 1;
     unsigned cullAnims: 1;
     unsigned cullMorphs: 1;
+    unsigned cullOrphanFlex: 1;  // -cullflex: drop flex rules/controllers with no backing delta verts
+    unsigned bNoCullFlexDesc: 1; // -nocullflexdesc: keep flexdescs nothing references (default is to cull them)
     unsigned bNoAutoDMXRulesGlobal: 1;  // $noautodmxrulesglobal: suppress auto DMX flex on every source
     unsigned bNoProceduralBonesGlobal: 1;  // $noproceduralbones: strip all axisinterp/quatinterp/aimat procedural bones
     unsigned bNoJiggleBonesGlobal: 1;  // $nojigglebones: strip all jigglebones but $donotcollapse their bones

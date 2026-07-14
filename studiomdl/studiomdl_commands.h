@@ -23,6 +23,8 @@ int ParseEmpty(void);
 int ParseSequence(s_sequence_t *pseq, bool isAppend);
 void CullUnreferencedAnimations();
 void CullUnreferencedFlexes();
+void CullOrphanFlex();
+void CullOrphanFlexDescs();
 
 struct MDLCommand_t {
     char *m_pName;
