@@ -1,10 +1,9 @@
 // Convex decomposition bridge implementation.
 //
-// This is the ONLY translation unit that pulls in the VHACD backend, and the
-// only one that defines ENABLE_VHACD_IMPLEMENTATION (the single-header library
-// requires its implementation to be compiled in exactly one .cpp).  Keeping it
-// isolated here means the rest of the compiler stays backend-agnostic; swapping
-// VHACD for another decomposer (e.g. CoACD) only touches this file.
+// The only place the compiler talks to the VHACD *decomposition* API, so swapping
+// VHACD for another decomposer (e.g. CoACD) only touches this file.  VHACD's hull
+// builder has a second consumer (libs/minicollision), so the single-header
+// library is compiled once in libs/vhacd/vhacd_impl.cpp rather than here.
 
 #include "studiomdl/convexdecompose.h"
 
@@ -15,9 +14,7 @@
 
 // VHACD is multithreaded by default.  Threading here is conditional on the
 // -collisionthreads CLI flag (see DecomposeConvex): >=2 enables VHACD's async
-// split-plane search across cores, <=1 forces the single-threaded path.  Define
-// the implementation exactly once, here.
-#define ENABLE_VHACD_IMPLEMENTATION 1
+// split-plane search across cores, <=1 forces the single-threaded path.
 #include "VHACD.h"
 
 namespace

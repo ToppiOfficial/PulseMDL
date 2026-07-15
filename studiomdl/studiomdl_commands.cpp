@@ -4945,6 +4945,11 @@ void Cmd_CDMaterials() {
         }
 
         Q_FixSlashes(szPath);
+
+        if (numcdtextures >= MAXSTUDIOCDTEXTURES) {
+            MdlError("Too many $cdmaterials paths (max %d)\n", MAXSTUDIOCDTEXTURES);
+        }
+
         cdtextures[numcdtextures] = strdup(szPath);
         numcdtextures++;
     }

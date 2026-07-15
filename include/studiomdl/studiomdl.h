@@ -67,6 +67,7 @@ class CDmeCombinationOperator;
 #define MAXSTUDIOFLEXKEYS        (MAXSTUDIOFLEXDESC / 2)    // always half of MAXSTUDIOFLEXDESC
 #define MAXSTUDIOFLEXRULES        4096
 #define MAXSTUDIOBONECONSTRAINTS  256
+#define MAXSTUDIOCDTEXTURES       32
 
 //-----------------------------------------------------------------------------
 // $modelbudget HARD CAPS (the compile-time ceilings each budget param clamps to)
@@ -134,7 +135,7 @@ EXTERN    char cddir[32][MAX_PATH];
 EXTERN  int g_numAddSearchDirs;
 EXTERN  char g_addSearchDirs[16][MAX_PATH];
 EXTERN    int numcdtextures;
-EXTERN    char *cdtextures[16];
+EXTERN    char *cdtextures[MAXSTUDIOCDTEXTURES + 1];
 EXTERN  char g_fullpath[MAX_PATH];
 
 EXTERN    char rootname[MAXSTUDIONAME];        // name of the root bone

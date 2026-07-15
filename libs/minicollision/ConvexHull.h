@@ -1,6 +1,6 @@
 #pragma once
-// Minimal 3D incremental convex hull builder.
-// Self-contained (no external deps). Suitable for small inputs (< 1024 verts).
+// 3D convex hull builder, backed by VHACD's hull (libs/vhacd).
+// Suitable for small inputs (< 1024 verts).
 
 #include <vector>
 

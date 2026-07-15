@@ -12,7 +12,7 @@ target_include_directories(minicollision
             ${CMAKE_SOURCE_DIR}/libs/tier1
 )
 
-target_link_libraries(minicollision PRIVATE mathlib tier0)
+target_link_libraries(minicollision PRIVATE mathlib tier0 vhacd)
 
 target_compile_definitions(minicollision PRIVATE
     ${PLATFORM_DEFINES}

@@ -39,6 +39,7 @@ add_subdirectory(libs/bonesetup)
 add_subdirectory(libs/meshutils)
 add_subdirectory(libs/interfaces)
 add_subdirectory(libs/filesystem)
+add_subdirectory(libs/vhacd)
 add_subdirectory(libs/minicollision)
 
 
@@ -84,7 +85,7 @@ add_executable(pulsemdl
         ${PULSEMDL_RESOURCES}
 )
 target_compile_definitions(pulsemdl PRIVATE -DSTATIC_TIER0)
-target_include_directories(pulsemdl PUBLIC include libs/minicollision libs/vhacd)
+target_include_directories(pulsemdl PUBLIC include libs/minicollision)
 target_link_libraries(pulsemdl PRIVATE
         tier0
         tier1
@@ -103,6 +104,7 @@ target_link_libraries(pulsemdl PRIVATE
         shlwapi
         filesystem_stdio_v2_static
         minicollision
+        vhacd
         )
 
 set_property(TARGET pulsemdl PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
