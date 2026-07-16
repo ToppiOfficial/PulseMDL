@@ -67,7 +67,7 @@ class CDmeCombinationOperator;
 #define MAXSTUDIOFLEXKEYS        (MAXSTUDIOFLEXDESC / 2)    // always half of MAXSTUDIOFLEXDESC
 #define MAXSTUDIOFLEXRULES        4096
 #define MAXSTUDIOBONECONSTRAINTS  256
-#define MAXSTUDIOCDTEXTURES       32
+#define MAXSTUDIOCDTEXTURES       96
 
 //-----------------------------------------------------------------------------
 // $modelbudget HARD CAPS (the compile-time ceilings each budget param clamps to)
@@ -78,7 +78,9 @@ class CDmeCombinationOperator;
 //   ------------      ----------------          ------------------
 //   totalverts        MAXSTUDIOVERTS            MAXSTUDIOVERTS
 //   bones             MAXSTUDIOBONES (1024)     256
-//   materials         MAXSTUDIOSKINS (128)      64
+//   materials         MAXSTUDIOSKINS (128)      96
+//   cdmaterials       MAXSTUDIOCDTEXTURES (96)  32
+//   lod               MAX_NUM_LODS (8)          8      (excludes $shadowlod)
 //   flexcontroller    MAXSTUDIOFLEXCTRL (256)   96
 //   flexmorph         MAXSTUDIOFLEXDESC (4096)  1024   (also bounds flexkeys = /2)
 //   flexmorphverts    MAXSTUDIOFLEXVERTS(65536) 32768
@@ -1703,13 +1705,17 @@ bool GetGlobalFilePath(const char *pSrc, char *pFullPath, int nMaxLen);
 s_source_t *Load_Source(const char *filename, const char *ext, bool reverse = false, bool isActiveModel = false,
                         bool bUseCache = true);
 
-// Resolve a $rendermesh to a bone+mesh-only clone for $collisionmodel/$collisionjoints/$generate:
+// Resolve a $rendermesh to a bone+mesh-only clone for $collisionmodel/$collisionjoints/$generatemodel:
 // jigglebones, hitboxes, procedural bones, and flex are all suppressed/stripped. Returns a
 // fresh independent clone each call; NULL if no such $rendermesh exists.
 s_source_t *GetRenderMeshCollisionSource(const char *name);
 
+// As above, but falls back to loading <name> as a plain source file (.dmx/.smd/.obj) when it is
+// not a $rendermesh - same bone+mesh-only rules either way. Cached per filename.
+s_source_t *GetCollisionSourceByName(const char *name);
+
 // Mark a $rendermesh definition as used (without loading it), so deferred consumers
-// like $generate/$generatejoint don't trip the "defined but never used" warning.
+// like $generatemodel/$generatejoint don't trip the "defined but never used" warning.
 void MarkRenderMeshUsed(const char *name);
 
 void ApplyOffsetToSrcVerts(s_source_t *pModel, matrix3x4_t matOffset);
@@ -2104,7 +2110,6 @@ struct StudioMdlContext {
     unsigned cullAnims: 1;
     unsigned cullMorphs: 1;
     unsigned cullOrphanFlex: 1;  // -cullflex: drop flex rules/controllers with no backing delta verts
-    unsigned bNoCullFlexDesc: 1; // -nocullflexdesc: keep flexdescs nothing references (default is to cull them)
     unsigned bNoAutoDMXRulesGlobal: 1;  // $noautodmxrulesglobal: suppress auto DMX flex on every source
     unsigned bNoProceduralBonesGlobal: 1;  // $noproceduralbones: strip all axisinterp/quatinterp/aimat procedural bones
     unsigned bNoJiggleBonesGlobal: 1;  // $nojigglebones: strip all jigglebones but $donotcollapse their bones
@@ -2152,7 +2157,9 @@ struct StudioMdlContext {
     // (simplify.cpp bone check) reads it.
     int budgetTotalVerts      = MAXSTUDIOVERTS;          // [MAXSTUDIOVERTS]
     int maxBoneLimit          = 256;                     // [MAXSTUDIOBONES = 1024]
-    int budgetMaterials       = 64;                      // [MAXSTUDIOSKINS = 128]
+    int budgetMaterials       = 96;                      // [MAXSTUDIOSKINS = 128]
+    int budgetCdMaterials     = 32;                      // [MAXSTUDIOCDTEXTURES = 96]
+    int budgetLods            = 8;                       // [MAX_NUM_LODS = 8] render LODs incl. root; $shadowlod excluded
     int budgetFlexControllers = 96;                      // [MAXSTUDIOFLEXCTRL = 256]
     int budgetFlexMorph       = 1024;                    // [MAXSTUDIOFLEXDESC = 4096] (also bounds flexkeys = /2)
     int budgetFlexMorphVerts  = 32768;                   // [MAXSTUDIOFLEXVERTS = 65536]

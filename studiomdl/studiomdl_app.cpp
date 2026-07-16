@@ -24,7 +24,7 @@
 #include "filesystem_init.h"
 #include "studiomdl/collisionmodel.h"
 
-static const char *PULSE_MDL_VERSION = "0.8.0";
+static const char *PULSE_MDL_VERSION = "0.9.0";
 
 extern StudioMdlContext g_StudioMdlContext;
 
@@ -561,7 +561,7 @@ void UsageAndExit() {
              "[-cullanims] - remove unreferenced $animations to reduce file size\n"
              "[-cullmorphs] - remove flex morphs not driven by any flexcontroller/flexrule/eyeball/mouth to reduce file size\n"
              "[-cullflex] - remove flex rules and flex controllers that have no backing delta vertices (auto nofacial)\n"
-             "[-collisionthreads <int>] - $generate/$generatejoint convex decomposition threads: <=1 single-threaded (deterministic), >=2 multithreaded (default 4)\n"
+             "[-collisionthreads <int>] - $generatemodel/$generatejoint convex decomposition threads: <=1 single-threaded (deterministic), >=2 multithreaded (default 4)\n"
     );
 }
 
@@ -1107,11 +1107,6 @@ bool CStudioMDLApp::ParseArguments() {
 
         if (!Q_stricmp(pArgv, "-cullflex")) {
             g_StudioMdlContext.cullOrphanFlex = true;
-            continue;
-        }
-
-        if (!Q_stricmp(pArgv, "-nocullflexdesc")) {
-            g_StudioMdlContext.bNoCullFlexDesc = true;
             continue;
         }
 

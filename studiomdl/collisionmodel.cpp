@@ -151,9 +151,9 @@ public:
 	};
 	CUtlVector<joint_override_t> m_pendingJointOverrides;
 
-	// Auto-generation requests parsed from $generate / $generatejoint sub-tokens.
+	// Auto-generation requests parsed from $generatemodel / $generatejoint sub-tokens.
 	// Each names a $rendermesh to convex-decompose into collision.  bone[0]=='\0'
-	// means single-body ($generate); otherwise the hulls attach to that joint.
+	// means single-body ($generatemodel); otherwise the hulls attach to that joint.
 	// A child bone whose weighted geometry is welded into a $generatejoint's hull
 	// (from $addgeneratechild).  All child geometry is emitted in the parent joint
 	// bone's local space, so the combined hull still tracks the parent at runtime.
@@ -167,7 +167,8 @@ public:
 		float concavity;
 		int   maxHulls;
 		bool  forceHulls;       // treat maxHulls as an exact target, not just a cap
-		int   maxVerts;         // max vertices per generated convex hull (detail/poly count)
+		int   maxVerts;         // hard per-hull vertex ceiling (deprecated as a user knob)
+		float decimate;         // fraction of each hull's natural verts to keep; <=0 = maxVerts drives it
 		float weightThreshold;  // ($generatejoint) min bone weight a vertex must have
 		                        // to be included; 0 = include any vertex touching the bone
 		CUtlVector<child_weld_t> children;  // from $addgeneratechild
@@ -200,6 +201,7 @@ public:
 	void AppendCollisionModel( CPhysCollisionModel *pCollide );
 	void UnlinkCollisionModel( CPhysCollisionModel *pCollide );
 	CPhysCollisionModel *GetCollisionModel( const char *pName );
+	const char *PairBoneName( const char *pName );
 	void AppendCollisionPair( const char *pName0, const char *pName1 );
 	void RemoveCollisionPair( const char *pName0, const char *pName1 );
 	void AddConstraint( const char *pJointName, int axis, jointlimit_t jointType, float limitMin, float limitMax, float friction );
@@ -378,26 +380,32 @@ CPhysCollisionModel *CJointedModel::GetCollisionModel( const char *pName )
 	return NULL;
 }
 
+// Bone name as stored on a collision pair: the source's spelling, or - with no source
+// ("blank") - an owned copy of what the QC said, checked against the joints at write time.
+const char *CJointedModel::PairBoneName( const char *pName )
+{
+	if ( !m_pModel )
+		return pName ? strdup( pName ) : NULL;
+	int idx = FindLocalBoneNamed( pName );
+	return ( idx >= 0 ) ? m_pModel->localBone[idx].name : NULL;
+}
+
 void CJointedModel::AppendCollisionPair( const char *pName0, const char *pName1 )
 {
 	collisionpair_t *pPair = new collisionpair_t;
 	pPair->obj0 = -1;
 	pPair->obj1 = -1;
-	int idx0 = FindLocalBoneNamed( pName0 );
-	pPair->pName0 = (idx0 >= 0) ? m_pModel->localBone[idx0].name : NULL;
-	int idx1 = FindLocalBoneNamed( pName1 );
-	pPair->pName1 = (idx1 >= 0) ? m_pModel->localBone[idx1].name : NULL;
+	pPair->pName0 = PairBoneName( pName0 );
+	pPair->pName1 = PairBoneName( pName1 );
 	pPair->pNext  = m_pCollisionPairs;
 	m_pCollisionPairs = pPair;
 }
 
 void CJointedModel::RemoveCollisionPair( const char *pName0, const char *pName1 )
 {
-	int idx0 = FindLocalBoneNamed( pName0 );
-	int idx1 = FindLocalBoneNamed( pName1 );
-	if ( idx0 < 0 || idx1 < 0 ) return;
-	const char *szName0 = m_pModel->localBone[idx0].name;
-	const char *szName1 = m_pModel->localBone[idx1].name;
+	const char *szName0 = PairBoneName( pName0 );
+	const char *szName1 = PairBoneName( pName1 );
+	if ( !szName0 || !szName1 ) return;
 
 	collisionpair_t *pPrev = NULL;
 	collisionpair_t *pPair = m_pCollisionPairs;
@@ -650,6 +658,24 @@ void CJointedModel::FixBoneList()
 {
 	if ( !m_isJointed ) return;
 
+	// No collision source ($collisionjoints "blank"): there are no source-local bones to map
+	// from, only generated joints, and those already resolved against the compiled skeleton
+	// (ProcessGenerateRequests errors on a bone findGlobalBone can't see).  So the names are
+	// good; canonicalize their spelling to the bone table's, which is what the remap below
+	// would have produced.
+	if ( !m_pModel )
+	{
+		for ( CPhysCollisionModel *p = m_pCollisionList; p; p = p->m_pNext )
+		{
+			int boneIndex = FindBoneInTable( p->m_name );
+			if ( boneIndex < 0 )
+				MdlWarning( "Physics for unknown bone %s\n", p->m_name );
+			else
+				p->m_name = g_bonetable[boneIndex].name;
+		}
+		return;
+	}
+
 	CPhysCollisionModel *pmodel = m_pCollisionList;
 	while ( pmodel )
 	{
@@ -695,6 +721,19 @@ const char *CJointedModel::FixParent( const char *pParentName )
 	{
 		if ( FindObjectInList( m_pCollisionList, pParentName ) )
 			return pParentName;
+
+		// "blank" source: walk the compiled skeleton instead of the source's local bones,
+		// looking for the nearest ancestor that a joint was generated for.
+		if ( !m_pModel )
+		{
+			int boneIndex = FindBoneInTable( pParentName );
+			if ( boneIndex < 0 ) return NULL;
+			int parentIndex = g_bonetable[boneIndex].parent;
+			if ( parentIndex < 0 ) break;
+			pParentName = g_bonetable[parentIndex].name;
+			continue;
+		}
+
 		int nodeIndex = FindLocalBoneNamed( pParentName );
 		if ( nodeIndex < 0 ) return NULL;
 		int parentIndex = m_pModel->localBone[nodeIndex].parent;
@@ -931,14 +970,17 @@ int CJointedModel::ProcessJointedModel()
 				if ( FaceHasVertOnBone( globalFace, boneIndex ) )
 					faceList.AddToTail( globalFace );
 			}
-
-			if ( m_allowConcaveJoints )
-				BuildConvexListForFaceList( m_pModel, convexList, vertList, faceList );
-			else
-				BuildSingleConvexForFaceList( m_pModel, convexList, vertList, faceList );
-
-			bValid = BuildConvexesForLists( convexOut, convexList, vertList, bonespaceVerts, m_remove2d );
 		}
+
+		// Build once, over every mesh's faces.  The list builders append, so running
+		// them per mesh re-added each earlier mesh's convexes: a 2-material collision
+		// mesh produced 3 hulls and 3x the volume.
+		if ( m_allowConcaveJoints )
+			BuildConvexListForFaceList( m_pModel, convexList, vertList, faceList );
+		else
+			BuildSingleConvexForFaceList( m_pModel, convexList, vertList, faceList );
+
+		bValid = BuildConvexesForLists( convexOut, convexList, vertList, bonespaceVerts, m_remove2d );
 
 		if ( convexOut.Count() > m_maxConvex )
 		{
@@ -1190,7 +1232,7 @@ struct bonecull_t {
 	float threshold;  // cullWeight; 0 -> any vertex touching the bone passes
 };
 
-// bKeepAll true ($generate) keeps every face regardless of weighting; otherwise a
+// bKeepAll true ($generatemodel) keeps every face regardless of weighting; otherwise a
 // face is kept only when all three of its verts pass some bone in keepBones.
 template <typename PosFn>
 static void ExtractTriangleMesh( s_source_t *pSrc, bool bKeepAll,
@@ -1199,8 +1241,8 @@ static void ExtractTriangleMesh( s_source_t *pSrc, bool bKeepAll,
                                  CUtlVector<int> &outTris,
                                  PosFn posFn )
 {
-	outVerts.RemoveAll();
-	outTris.RemoveAll();
+	// Appends (emit() returns absolute outVerts indices); callers clear, so several
+	// sources can accumulate into one mesh.
 
 	// Map global source vertex index -> compact output index (lazily assigned).
 	CUtlVector<int> remap;
@@ -1279,22 +1321,11 @@ static int AttachDecomposedHulls( CPhysCollisionModel *pPhys,
 		const DecomposedHull &h = hulls[i];
 		if ( h.verts.Count() < 4 ) { nSkipped++; continue; }
 
-		// Feed the hull's vertex cloud to the packer.  The packer re-hulls and
-		// rejects clouds it can't turn into a clean closed manifold (typically
-		// caused by near-coplanar points).  If rejected, retry with progressively
-		// decimated subsets (keep every Nth vertex) - a sparser cloud of the same
-		// shape sidesteps the coplanar-edge degeneracy while preserving extents.
-		CPhysConvex *pConvex = NULL;
-		for ( int stride = 1; stride <= 4 && !pConvex; stride++ )
-		{
-			CUtlVector<Vector *> vertsThisConvex;
-			for ( int j = 0; j < h.verts.Count(); j += stride )
-				vertsThisConvex.AddToTail( const_cast<Vector *>( &h.verts[j] ) );
-			if ( vertsThisConvex.Count() < 4 )
-				break;
-			pConvex = physcollision->ConvexFromVerts( vertsThisConvex.Base(), vertsThisConvex.Count() );
-		}
+		CUtlVector<Vector *> vertsThisConvex;
+		for ( int j = 0; j < h.verts.Count(); j++ )
+			vertsThisConvex.AddToTail( const_cast<Vector *>( &h.verts[j] ) );
 
+		CPhysConvex *pConvex = physcollision->ConvexFromVerts( vertsThisConvex.Base(), vertsThisConvex.Count() );
 		if ( pConvex )
 		{
 			physcollision->SetConvexGameData( pConvex, gameData );
@@ -1318,9 +1349,26 @@ static int AttachDecomposedHulls( CPhysCollisionModel *pPhys,
 	return convexOut.Count();
 }
 
+// Every distinct source behind a $body/$bodygroup/$model, in QC order.  Used when a
+// generate request names no mesh: it builds from the geometry already parsed, so no file
+// is loaded and nothing new can leak into the model.  LOD sources are skipped - collision
+// comes from LOD0.  SimplifyModel() writes its global remap into m_GlobalVertices and
+// leaves vertex[]/localBone[]/boneToPose in local bind space, which is what the extractor
+// wants, so running after it is safe.
+static void CollectBodySources( CUtlVector<s_source_t *> &out )
+{
+	for ( int b = 0; b < g_numbodyparts; b++ )
+		for ( int m = 0; m < g_bodypart[b].nummodels; m++ )
+		{
+			s_source_t *pSrc = g_bodypart[b].pmodel[m]->source;
+			if ( pSrc && pSrc->numvertices && out.Find( pSrc ) == out.InvalidIndex() )
+				out.AddToTail( pSrc );
+		}
+}
+
 //=============================================================================
 // ProcessGenerateRequests: auto-generate convex collision from $rendermesh
-// geometry for $generate (single body) and $generatejoint (per joint) tokens.
+// geometry for $generatemodel (single body) and $generatejoint (per joint) tokens.
 //=============================================================================
 void CJointedModel::ProcessGenerateRequests()
 {
@@ -1352,14 +1400,32 @@ void CJointedModel::ProcessGenerateRequests()
 	{
 		const generate_request_t &req = m_generateRequests[r];
 
-		// Bone+mesh-only clone: $generate needs geometry+weights to decompose, never the
-		// source's flex/jigglebones/procedural bones (which must not leak into the model).
-		s_source_t *pSrc = GetRenderMeshCollisionSource( req.rendermesh );
-		if ( !pSrc )
+		// Geometry source(s).  A named mesh resolves to a bone+mesh-only clone ($rendermesh or
+		// a plain file): $generatemodel needs geometry+weights to decompose, never the source's
+		// flex/jigglebones/procedural bones (which must not leak into the model).  An empty name
+		// means "reuse what the model already parsed" - every $body source, nothing loaded.
+		CUtlVector<s_source_t *> sources;
+		const char *pMeshDesc = req.rendermesh[0] ? req.rendermesh : "<model body>";
+		if ( req.rendermesh[0] )
 		{
-			MdlError( "$generate%s: unknown $rendermesh '%s' (define it with $rendermesh first).\n",
-				req.bone[0] ? "joint" : "", req.rendermesh );
-			return;
+			s_source_t *pSrc = GetCollisionSourceByName( req.rendermesh );
+			if ( !pSrc )
+			{
+				MdlError( "%s: '%s' is neither a $rendermesh nor a loadable source file.\n",
+					req.bone[0] ? "$generatejoint" : "$generatemodel", req.rendermesh );
+				return;
+			}
+			sources.AddToTail( pSrc );
+		}
+		else
+		{
+			CollectBodySources( sources );
+			if ( !sources.Count() )
+			{
+				MdlError( "%s: no mesh name given and the model has no $body/$bodygroup geometry "
+					"to generate from.\n", req.bone[0] ? "$generatejoint" : "$generatemodel" );
+				return;
+			}
 		}
 
 		CUtlVector<Vector> verts;
@@ -1368,15 +1434,6 @@ void CJointedModel::ProcessGenerateRequests()
 
 		if ( bJoint )
 		{
-			// Per-joint: extract faces weighted to the named bone, in that bone's
-			// local space, so the generated hull tracks the bone at runtime.
-			int localBone = ::FindLocalBoneNamed( pSrc, req.bone );
-			if ( localBone < 0 )
-			{
-				MdlError( "$generatejoint: bone '%s' not found in $rendermesh '%s'.\n",
-					req.bone, req.rendermesh );
-				return;
-			}
 			int globalBone = findGlobalBone( req.bone );
 			if ( globalBone < 0 )
 			{
@@ -1384,40 +1441,61 @@ void CJointedModel::ProcessGenerateRequests()
 				return;
 			}
 
-			matrix3x4_t poseFromBone = pSrc->boneToPose[localBone];
-			matrix3x4_t boneFromPose;
-			MatrixInvert( poseFromBone, boneFromPose );
+			// Per-joint: extract faces weighted to the named bone, in that bone's local space, so
+			// the generated hull tracks the bone at runtime.  With several sources each is
+			// transformed by its own bind pose into that same bone space and the results welded.
+			s_source_t *pBoneSrc = NULL;   // first source carrying the bone; names the solid
+			int         boneLocal = -1;
 
-			// Keep-list: the joint bone plus any $addgeneratechild bones.  All of
-			// their geometry is emitted in the parent bone's local space below, so
-			// the welded hull tracks the parent joint at runtime.
-			CUtlVector<bonecull_t> keepBones;
+			for ( int s = 0; s < sources.Count(); s++ )
 			{
-				bonecull_t bc; bc.localBone = localBone; bc.threshold = req.weightThreshold;
-				keepBones.AddToTail( bc );
-			}
-			for ( int c = 0; c < req.children.Count(); c++ )
-			{
-				int childLocal = ::FindLocalBoneNamed( pSrc, req.children[c].bone );
-				if ( childLocal < 0 )
+				s_source_t *pSrc = sources[s];
+				int localBone = ::FindLocalBoneNamed( pSrc, req.bone );
+				if ( localBone < 0 )
+					continue;   // this body doesn't have the bone; another may
+				if ( !pBoneSrc ) { pBoneSrc = pSrc; boneLocal = localBone; }
+
+				matrix3x4_t poseFromBone = pSrc->boneToPose[localBone];
+				matrix3x4_t boneFromPose;
+				MatrixInvert( poseFromBone, boneFromPose );
+
+				// Keep-list: the joint bone plus any $addgeneratechild bones.  All of
+				// their geometry is emitted in the parent bone's local space below, so
+				// the welded hull tracks the parent joint at runtime.
+				CUtlVector<bonecull_t> keepBones;
 				{
-					MdlWarning( "$addgeneratechild: child bone '%s' not found in $rendermesh '%s' (skipped).\n",
-						req.children[c].bone, req.rendermesh );
-					continue;
+					bonecull_t bc; bc.localBone = localBone; bc.threshold = req.weightThreshold;
+					keepBones.AddToTail( bc );
 				}
-				bonecull_t bc;
-				bc.localBone = childLocal;
-				bc.threshold = ( req.children[c].weightThreshold < 0.0f )
-					? req.weightThreshold : req.children[c].weightThreshold;
-				keepBones.AddToTail( bc );
+				for ( int c = 0; c < req.children.Count(); c++ )
+				{
+					int childLocal = ::FindLocalBoneNamed( pSrc, req.children[c].bone );
+					if ( childLocal < 0 )
+					{
+						MdlWarning( "$addgeneratechild: child bone '%s' not found in '%s' (skipped).\n",
+							req.children[c].bone, pMeshDesc );
+						continue;
+					}
+					bonecull_t bc;
+					bc.localBone = childLocal;
+					bc.threshold = ( req.children[c].weightThreshold < 0.0f )
+						? req.weightThreshold : req.children[c].weightThreshold;
+					keepBones.AddToTail( bc );
+				}
+
+				ExtractTriangleMesh( pSrc, false, keepBones, verts, tris,
+					[&]( uint32_t vi ) -> Vector {
+						Vector out;
+						VectorTransform( pSrc->vertex[vi].position, boneFromPose, out );
+						return out;
+					} );
 			}
 
-			ExtractTriangleMesh( pSrc, false, keepBones, verts, tris,
-				[&]( uint32_t vi ) -> Vector {
-					Vector out;
-					VectorTransform( pSrc->vertex[vi].position, boneFromPose, out );
-					return out;
-				} );
+			if ( !pBoneSrc )
+			{
+				MdlError( "$generatejoint: bone '%s' not found in '%s'.\n", req.bone, pMeshDesc );
+				return;
+			}
 
 			// Compensate $transformbindposebone bind-pose edits on the joint bone, as
 			// ProcessJointedModel does; no-op for unedited bones.  Child welds ride the
@@ -1439,16 +1517,16 @@ void CJointedModel::ProcessGenerateRequests()
 			{
 				MdlError( "$generatejoint: no geometry on bone '%s' in '%s' passes cullweight %.2f.\n"
 					"Lower cullweight, or check that '%s' has geometry weighted to '%s'.\n",
-					req.bone, req.rendermesh, req.weightThreshold, req.rendermesh, req.bone );
+					req.bone, pMeshDesc, req.weightThreshold, pMeshDesc, req.bone );
 				return;
 			}
 
 			CUtlVector<DecomposedHull> hulls;
-			if ( !DecomposeConvex( verts, tris, req.concavity, req.maxHulls, req.forceHulls, req.maxVerts, hulls ) )
+			if ( !DecomposeConvex( verts, tris, req.concavity, req.maxHulls, req.forceHulls, req.maxVerts, req.decimate, hulls ) )
 			{
 				MdlError( "$generatejoint: convex decomposition failed for bone '%s' (mesh '%s').\n"
 					"Try a higher concavity or simpler/thicker source geometry.\n",
-					req.bone, req.rendermesh );
+					req.bone, pMeshDesc );
 				return;
 			}
 			if ( hulls.Count() > m_maxConvex )
@@ -1456,7 +1534,7 @@ void CJointedModel::ProcessGenerateRequests()
 					req.bone, hulls.Count(), m_maxConvex );
 
 			// Attach to the joint's existing collision model, or create one.
-			const char *pBoneName = pSrc->localBone[localBone].name;
+			const char *pBoneName = pBoneSrc->localBone[boneLocal].name;
 			CPhysCollisionModel *pPhys = GetCollisionModel( pBoneName );
 			bool bNew = ( pPhys == NULL );
 			if ( bNew )
@@ -1464,8 +1542,8 @@ void CJointedModel::ProcessGenerateRequests()
 				pPhys = InitCollisionModel( pBoneName );
 				pPhys->m_mass   = 1.0f;
 				pPhys->m_name   = pBoneName;
-				int parent = pSrc->localBone[localBone].parent;
-				pPhys->m_parent = ( parent >= 0 ) ? pSrc->localBone[parent].name : NULL;
+				int parent = pBoneSrc->localBone[boneLocal].parent;
+				pPhys->m_parent = ( parent >= 0 ) ? pBoneSrc->localBone[parent].name : NULL;
 			}
 			else if ( pPhys->m_pCollisionData )
 			{
@@ -1488,7 +1566,7 @@ void CJointedModel::ProcessGenerateRequests()
 				if ( bNew )
 					delete pPhys;
 				MdlError( "$generatejoint: bone '%s' produced no valid collision (all pieces rejected by the physics packer).\n"
-					"Simplify/thicken the source mesh, raise concavity, or lower maxverts.\n",
+					"Simplify/thicken the source mesh, raise concavity, or lower decimate.\n",
 					pBoneName );
 				return;
 			}
@@ -1500,41 +1578,45 @@ void CJointedModel::ProcessGenerateRequests()
 			{
 				if ( req.children.Count() )
 					printf( "$generatejoint %-20s (%d convex elements from '%s', +%d child bone(s))\n",
-						pBoneName, nAttached, req.rendermesh, req.children.Count() );
+						pBoneName, nAttached, pMeshDesc, req.children.Count() );
 				else
 					printf( "$generatejoint %-20s (%d convex elements from '%s')\n",
-						pBoneName, nAttached, req.rendermesh );
+						pBoneName, nAttached, pMeshDesc );
 			}
 		}
 		else
 		{
 			// Single body: all faces in model/world space, one rigid solid.
-			CUtlVector<bonecull_t> keepAll;  // unused when bKeepAll is true
-			ExtractTriangleMesh( pSrc, true, keepAll, verts, tris,
-				[&]( uint32_t vi ) -> Vector {
-					Vector raw = pSrc->vertex[vi].position;
-					Vector shifted; VectorSubtract( raw, pSrc->adjust, shifted );
-					matrix3x4_t originXform; AngleMatrix( pSrc->rotation, originXform );
-					Vector out; VectorRotate( shifted, originXform, out );
-					return out;
-				} );
+			for ( int s = 0; s < sources.Count(); s++ )
+			{
+				s_source_t *pSrc = sources[s];
+				CUtlVector<bonecull_t> keepAll;  // unused when bKeepAll is true
+				ExtractTriangleMesh( pSrc, true, keepAll, verts, tris,
+					[&]( uint32_t vi ) -> Vector {
+						Vector raw = pSrc->vertex[vi].position;
+						Vector shifted; VectorSubtract( raw, pSrc->adjust, shifted );
+						matrix3x4_t originXform; AngleMatrix( pSrc->rotation, originXform );
+						Vector out; VectorRotate( shifted, originXform, out );
+						return out;
+					} );
+			}
 
 			if ( verts.Count() < 4 || tris.Count() < 3 )
 			{
-				MdlError( "$generate: no usable geometry in $rendermesh '%s'.\n", req.rendermesh );
+				MdlError( "$generatemodel: no usable geometry in '%s'.\n", pMeshDesc );
 				return;
 			}
 
 			CUtlVector<DecomposedHull> hulls;
-			if ( !DecomposeConvex( verts, tris, req.concavity, req.maxHulls, req.forceHulls, req.maxVerts, hulls ) )
+			if ( !DecomposeConvex( verts, tris, req.concavity, req.maxHulls, req.forceHulls, req.maxVerts, req.decimate, hulls ) )
 			{
-				MdlError( "$generate: convex decomposition failed for '%s'.\n"
-					"Try a higher concavity or simpler/thicker source geometry.\n", req.rendermesh );
+				MdlError( "$generatemodel: convex decomposition failed for '%s'.\n"
+					"Try a higher concavity or simpler/thicker source geometry.\n", pMeshDesc );
 				return;
 			}
 			if ( hulls.Count() > m_maxConvex )
 				MdlWarning( "COSTLY GENERATED COLLISION!!!! ('%s': %d parts - %d allowed)\n",
-					req.rendermesh, hulls.Count(), m_maxConvex );
+					pMeshDesc, hulls.Count(), m_maxConvex );
 
 			CPhysCollisionModel *pPhys = new CPhysCollisionModel;
 			SetCollisionModelDefaults( pPhys );
@@ -1542,14 +1624,14 @@ void CJointedModel::ProcessGenerateRequests()
 			if ( nAttached == 0 || !pPhys->m_pCollisionData )
 			{
 				delete pPhys;
-				MdlError( "$generate: '%s' produced no valid collision (all pieces rejected by the physics packer).\n"
-					"Simplify/thicken the source mesh, raise concavity, or lower maxverts.\n", req.rendermesh );
+				MdlError( "$generatemodel: '%s' produced no valid collision (all pieces rejected by the physics packer).\n"
+					"Simplify/thicken the source mesh, raise concavity, or lower decimate.\n", pMeshDesc );
 				return;
 			}
 			pPhys->m_mass = 1.0f;
 
 			char tmp[512];
-			Q_FileBase( pSrc->filename, tmp, sizeof(tmp) );
+			Q_FileBase( sources[0]->filename, tmp, sizeof(tmp) );
 			char *out = new char[strlen(tmp)+1];
 			strcpy( out, tmp );
 			pPhys->m_name   = out;
@@ -1557,7 +1639,7 @@ void CJointedModel::ProcessGenerateRequests()
 			AppendCollisionModel( pPhys );
 
 			if ( !g_StudioMdlContext.quiet )
-				printf( "$generate: '%s' -> %d convex sub-parts\n", req.rendermesh, nAttached );
+				printf( "$generatemodel: '%s' -> %d convex sub-parts\n", pMeshDesc, nAttached );
 		}
 	}
 }
@@ -1591,13 +1673,25 @@ static void CCmd_JointConstrain( CJointedModel &joints, const char *pJointName, 
 	float limitMax  = Safe_atof(pLimitMax);
 	float friction  = Safe_atof(pFriction);
 	int   axis      = -1;
-	int   jointIndex = joints.FindLocalBoneNamed( pJointName );
-	if ( !g_StudioMdlContext.createMakefile && jointIndex < 0 )
+
+	// With a collision source, the name is checked against its bones now.  With "blank" there is
+	// nothing to check against yet - the joints don't exist until after SimplifyModel(), and
+	// g_bonetable is empty at parse time - so keep the name (owned copy: nothing else holds it)
+	// and let FixCollisionHierarchy()/the write-time check resolve or reject it.
+	if ( joints.m_pModel )
 	{
-		MdlWarning( "Can't find joint %s\n", pJointName );
-		return;
+		int jointIndex = joints.FindLocalBoneNamed( pJointName );
+		if ( !g_StudioMdlContext.createMakefile && jointIndex < 0 )
+		{
+			MdlWarning( "Can't find joint %s\n", pJointName );
+			return;
+		}
+		pJointName = joints.m_pModel->localBone[jointIndex].name;
 	}
-	pJointName = joints.m_pModel->localBone[jointIndex].name;
+	else
+	{
+		pJointName = strdup( pJointName );
+	}
 	if ( pJointAxis ) axis = tolower(pJointAxis[0]) - 'x';
 	if ( axis < 0 || axis > 2 || limitMin > limitMax )
 	{
@@ -1616,6 +1710,14 @@ static void CCmd_JointConstrain( CJointedModel &joints, const char *pJointName, 
 
 static void CCmd_JointSkip( CJointedModel &joints, const char *pName )
 {
+	// Nothing to skip without a collision source: joints only exist where $generatejoint asks
+	// for one.  Say so rather than "not found", which reads like the bone is misspelled.
+	if ( !joints.m_pModel )
+	{
+		MdlWarning( "$jointskip %s: ignored, a \"blank\" $collisionjoints only builds the joints "
+			"$generatejoint asks for.\n", pName );
+		return;
+	}
 	int boneIndex = joints.FindLocalBoneNamed( pName );
 	if ( boneIndex < 0 ) MdlWarning( "Can't skip joint %s, not found\n", pName );
 	else                 joints.SkipBone( boneIndex );
@@ -1640,10 +1742,13 @@ static void CCmd_JoinAnimatedFriction( CJointedModel &joints, const char *pMin, 
 }
 
 //-----------------------------------------------------------------------------
-// Parse a $generate / $generatejoint request.
+// Parse a $generatemodel / $generatejoint request.
 //
-//   $generate       <rendermesh> [concavity <f>] [hull <i>]
-//   $generatejoint  <bone> <rendermesh> [concavity <f>] [hull <i>] [cullweight <f>]
+//   $generatemodel         <mesh> [concavity <f>] [hull <i>] [decimate <f>]
+//   $generatejoint  <bone> <mesh> [concavity <f>] [hull <i>] [decimate <f>] [cullweight <f>]
+//
+// <mesh> is a $rendermesh name, a source file (.dmx/.smd/.obj), or "" to build from the
+// $body geometry the model already parsed.
 //
 // All options are keyword/value pairs, optional, in any order, with defaults.
 // Returns true if the required positional args were present.
@@ -1656,10 +1761,13 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 	req.concavity        = 0.04f;
 	req.maxHulls         = 1;
 	req.forceHulls       = false;
-	req.maxVerts         = 16;
+	req.maxVerts         = 512;
+	req.decimate         = 0.22f;
 	req.weightThreshold  = 0.42f;
 
-	const char *pCmd = bJoint ? "$generatejoint" : "$generate";
+	bool bHasMaxVerts = false, bHasDecimate = false;
+
+	const char *pCmd = bJoint ? "$generatejoint" : "$generatemodel";
 
 	// Required positional args.
 	if ( bJoint )
@@ -1667,12 +1775,13 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 		if ( !GetToken( false ) ) { MdlWarning( "%s: expected <bone>\n", pCmd ); return false; }
 		V_strncpy( req.bone, token, sizeof(req.bone) );
 	}
-	if ( !GetToken( false ) ) { MdlWarning( "%s: expected <rendermesh>\n", pCmd ); return false; }
+	if ( !GetToken( false ) ) { MdlWarning( "%s: expected <mesh> (or \"\" for the model's own body)\n", pCmd ); return false; }
 	V_strncpy( req.rendermesh, token, sizeof(req.rendermesh) );
 
 	// Mark the render mesh as used now, at parse time.  Actual resolution happens later
 	// in ProcessGenerateRequests(), after ReportUnusedRenderMeshDefs() has already run,
 	// so without this the mesh would be falsely reported as defined-but-never-used.
+	// No-op for a filename or the empty (use-model-body) name.
 	MarkRenderMeshUsed( req.rendermesh );
 
 	// Optional keyword/value pairs.  Stop at the next token that is not one of our
@@ -1694,9 +1803,13 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 			// Flag, no value: make maxHulls an exact target instead of a cap.
 			req.forceHulls = true;
 		}
+		else if ( !stricmp( token, "decimate" ) )
+		{
+			if ( GetToken( false ) ) { req.decimate = (float)atof( token ); bHasDecimate = true; }
+		}
 		else if ( !stricmp( token, "maxverts" ) || !stricmp( token, "verts" ) )
 		{
-			if ( GetToken( false ) ) req.maxVerts = atoi( token );
+			if ( GetToken( false ) ) { req.maxVerts = atoi( token ); bHasMaxVerts = true; }
 		}
 		else if ( bJoint && ( !stricmp( token, "cullweight" ) || !stricmp( token, "cull" ) ) )
 		{
@@ -1712,10 +1825,40 @@ static bool ParseGenerateRequest( CJointedModel::generate_request_t &req, bool b
 
 	if ( req.maxHulls < 1 ) req.maxHulls = 1;
 	if ( req.maxHulls > 8 ) req.maxHulls = 8;
-	if ( req.maxVerts < 4 )   req.maxVerts = 4;
+
+	// maxverts is deprecated and frozen: an absolute vertex count means nothing
+	// without knowing how dense the hull would have been, so `decimate` (a fraction
+	// of each hull's natural detail, like Blender's modifier) replaces it.  A lone
+	// maxverts still works for old QCs - it just caps VHACD directly, no reduce pass.
+	if ( bHasMaxVerts )
+	{
+		if ( bHasDecimate )
+		{
+			MdlWarning( "%s '%s': maxverts is deprecated (unsupported, slated for removal) "
+				"and is ignored when decimate is set - remove it.\n",
+				pCmd, req.rendermesh );
+			req.maxVerts = 512;
+		}
+		else
+		{
+			MdlWarning( "%s '%s': maxverts is deprecated - unsupported, no longer fixed, and "
+				"slated for removal in a future release.  Use decimate <0.1..1.0> instead.\n",
+				pCmd, req.rendermesh );
+			req.decimate = 0.0f;   // no reduce pass; maxVerts is the flat cap
+		}
+	}
+
 	// Ceiling well under IVP's 4095-triangle / 65535-point ledge limits (a convex
-	// hull of V verts has 2V-4 tris): 512 verts -> ~1020 tris.  Default stays 16.
+	// hull of V verts has 2V-4 tris): 512 verts -> ~1020 tris.  Per hull, not a
+	// budget shared across a joint's hulls.
+	if ( req.maxVerts < 4 )   req.maxVerts = 4;
 	if ( req.maxVerts > 512 ) req.maxVerts = 512;
+
+	if ( req.decimate > 0.0f )
+	{
+		if ( req.decimate < 0.1f ) req.decimate = 0.1f;
+		if ( req.decimate > 1.0f ) req.decimate = 1.0f;
+	}
 	return true;
 }
 
@@ -1887,9 +2030,15 @@ static void ParseCollisionCommands( CJointedModel &joints )
 			joints.RemoveCollisionPair( args[0], args[1] );
 			joints.RemoveCollisionPair( args[1], args[0] );
 		}
-		else if ( !stricmp( command, "$generate" ) )
+		else if ( !stricmp( command, "$generatemodel" ) || !stricmp( command, "$generate" ) )
 		{
-			// $generate <rendermesh> [concavity <f>] [hull <i>]
+			// $generatemodel <rendermesh> [concavity <f>] [hull <i>] [decimate <f>]
+			// $generate is the old name, kept as an alias: an unknown sub-token here only
+			// warns, so dropping it would compile a model with no collision at all.
+			if ( !stricmp( command, "$generate" ) )
+				MdlWarning( "$generate has been renamed to $generatemodel - update your QC "
+					"(the old name still works for now).\n" );
+
 			// Build in place: generate_request_t holds a CUtlVector and is not copyable.
 			int idx = joints.m_generateRequests.AddToTail();
 			if ( !ParseGenerateRequest( joints.m_generateRequests[idx], false ) )
@@ -2044,11 +2193,10 @@ int DoCollisionModel( bool separateJoints )
 	}
 	else
 	{
-		// A $rendermesh name resolves to its filtered geometry (bone + mesh only, no
-		// flex/jigglebones/procedural bones); otherwise fall back to a file load.
-		s_source_t *pmodel = GetRenderMeshCollisionSource( name );
-		if ( !pmodel )
-			pmodel = Load_Source( name, "", false, false, false );
+		// Bone + mesh only, whether <name> is a $rendermesh or a file: a collision source is
+		// geometry, so its DMX jigglebones/hitboxes/procedural bones/flex must not register
+		// into the model just because it was named here.
+		s_source_t *pmodel = GetCollisionSourceByName( name );
 		if ( !pmodel ) return 0;
 
 		if ( nummaterials && numtextures && (numtextures != g_numtextures || nummaterials != g_nummaterials) )
@@ -2087,7 +2235,7 @@ void CollisionModel_Build()
 
 	// Determine whether there is any real source geometry to build from (a loaded
 	// model or an $addconvexsrc extra model).  A pure-generation block
-	// ($collisionmodel "blank" { $generate ... }) has neither and skips the normal
+	// ($collisionmodel "blank" { $generatemodel ... }) has neither and skips the normal
 	// source build, going straight to ProcessGenerateRequests.
 	bool bHasSource = g_JointedModel.m_pModel != NULL;
 	for ( int i = 0; !bHasSource && i <= MAX_EXTRA_COLLISION_MODELS; i++ )
@@ -2126,7 +2274,20 @@ void CJointedModel::FixCollisionHierarchy()
 	CJointConstraint *pList = m_pConstraintList;
 	while ( pList )
 	{
-		pList->m_pJointName = FixParent( pList->m_pJointName );
+		// Keep the QC's name when it resolves to nothing, so the write-time check can name the
+		// offending bone instead of printing "(null)".
+		const char *pOrig  = pList->m_pJointName;
+		const char *pFixed = FixParent( pOrig );
+		if ( pFixed )
+			pList->m_pJointName = pFixed;
+
+		// A constraint sliding onto an ancestor is normal with a source - that is bone collapse
+		// doing its job.  With "blank" every joint is explicit, so it means a missing
+		// $generatejoint, and the constraint is quietly lost (it lands on a joint that has its
+		// own, or on the root, which takes none).
+		if ( !m_pModel && pFixed && pOrig && stricmp( pOrig, pFixed ) )
+			MdlWarning( "$jointconstrain %s: no $generatejoint for that bone, so the constraint "
+				"moved to '%s' and will not act on %s.\n", pOrig, pFixed, pOrig );
 		pList = pList->m_pNext;
 	}
 

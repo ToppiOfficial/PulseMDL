@@ -31,13 +31,18 @@ struct DecomposedHull
 //                 count and fewer pieces come out when the mesh needs fewer.
 //   forceHulls  : if true, split aggressively to hit maxHulls exactly (as far as
 //                 the geometry allows) instead of stopping early at concavity.
-//   maxVerts    : max vertices per output convex hull (detail / polygon count).
-//                 Lower = simpler hulls, easier for the physics packer to seal.
+//   maxVerts    : hard per-hull vertex ceiling (not a budget shared across hulls).
+//   decimate    : keep this fraction of each hull's *own* natural vertex count,
+//                 in (0..1]; 1 = the backend's output untouched.  Applied per hull,
+//                 so a piece that came out an 8-vert box stays a box while a dense
+//                 piece is cut hard.  <=0 disables the reduce, leaving maxVerts as
+//                 a flat cap (the deprecated maxverts path).
 //   out         : receives one DecomposedHull per produced convex piece.
 // Returns true if at least one hull was produced.
 bool DecomposeConvex( const CUtlVector<Vector> &verts,
                       const CUtlVector<int> &triIndices,
                       float concavity, int maxHulls, bool forceHulls, int maxVerts,
+                      float decimate,
                       CUtlVector<DecomposedHull> &out );
 
 #endif // CONVEX_DECOMPOSE_H

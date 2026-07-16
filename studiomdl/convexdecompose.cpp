@@ -17,6 +17,11 @@
 // split-plane search across cores, <=1 forces the single-threaded path.
 #include "VHACD.h"
 
+// The hull builder, for the per-hull decimate pass below.  Compiled once in
+// libs/vhacd/vhacd_impl.cpp; VHACD.h only declares its hull classes under
+// ENABLE_VHACD_IMPLEMENTATION, which this TU deliberately does not define.
+#include "vhacd_hull.h"
+
 namespace
 {
 	// Swallow VHACD's progress/log chatter so a model compile stays quiet.
@@ -30,6 +35,7 @@ namespace
 bool DecomposeConvex( const CUtlVector<Vector> &verts,
                       const CUtlVector<int> &triIndices,
                       float concavity, int maxHulls, bool forceHulls, int maxVerts,
+                      float decimate,
                       CUtlVector<DecomposedHull> &out )
 {
 	out.RemoveAll();
@@ -72,15 +78,14 @@ bool DecomposeConvex( const CUtlVector<Vector> &verts,
 	int nThreads = CommandLine()->ParmValue( "-collisionthreads", 4 );
 	params.m_asyncACD = ( nThreads >= 2 );
 
-	// The downstream physics packer (minicollision) re-hulls each piece with a
-	// small incremental convex-hull builder and rejects anything that isn't a
-	// clean closed manifold.  Keeping the per-hull vertex count low produces
-	// simpler, well-conditioned hulls that survive that re-hull/validation.
-	// (VHACD's default of 64 routinely yields hulls the packer rejects.)
-	// maxVerts also doubles as the user's "polygon count / detail" knob.
+	// Hard per-hull ceiling only.  The user-facing detail knob is `decimate`, applied
+	// per hull after the fact (below) - it needs each hull's *natural* vert count, so
+	// this cap must stay out of its way.
 	if ( maxVerts < 4 )  maxVerts = 4;   // a convex solid needs at least 4 verts
 	params.m_maxNumVerticesPerCH = (uint32_t)maxVerts;
 	params.m_shrinkWrap          = true;
+
+	if ( decimate > 1.0f ) decimate = 1.0f;
 
 	// Map the user-facing concavity [0..1] onto VHACD's allowed volume error
 	// (a percent).  Lower concavity -> tighter fit -> smaller allowed error ->
@@ -138,13 +143,38 @@ bool DecomposeConvex( const CUtlVector<Vector> &verts,
 			if ( ch.m_points.size() < 4 )
 				continue;
 
-			DecomposedHull &hull = out[ out.AddToTail() ];
-			hull.verts.EnsureCapacity( (int)ch.m_points.size() );
+			std::vector<float> pts;
+			pts.reserve( ch.m_points.size() * 3 );
 			for ( size_t v = 0; v < ch.m_points.size(); v++ )
 			{
 				const VHACD::Vertex &p = ch.m_points[v];
-				hull.verts.AddToTail( Vector( (float)p.mX, (float)p.mY, (float)p.mZ ) );
+				pts.push_back( (float)p.mX );
+				pts.push_back( (float)p.mY );
+				pts.push_back( (float)p.mZ );
 			}
+
+			// Reduce against THIS hull's own vert count, not a flat budget, so a dense
+			// blob is cut hard while an already-simple piece is left alone.  Floor of 8
+			// (a box): 4 would rebuild a box as a tetrahedron and lose a third of its
+			// volume.  A failed reduce keeps the full cloud - too dense beats degenerate.
+			int nNatural = (int)ch.m_points.size();
+			if ( decimate > 0.0f && decimate < 1.0f )
+			{
+				int nTarget = (int)( decimate * (float)nNatural + 0.5f );
+				if ( nTarget < 8 ) nTarget = 8;
+				if ( nTarget < nNatural )
+				{
+					VHACDHull::HullResult reduced;
+					if ( VHACDHull::ComputeHull( pts.data(), nNatural, nTarget, reduced ) &&
+					     reduced.vertices.size() >= 12 )   // >=4 verts survived
+						pts.swap( reduced.vertices );
+				}
+			}
+
+			DecomposedHull &hull = out[ out.AddToTail() ];
+			hull.verts.EnsureCapacity( (int)( pts.size() / 3 ) );
+			for ( size_t v = 0; v + 2 < pts.size(); v += 3 )
+				hull.verts.AddToTail( Vector( pts[v], pts[v+1], pts[v+2] ) );
 		}
 	}
 

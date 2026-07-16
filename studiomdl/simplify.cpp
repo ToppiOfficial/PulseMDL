@@ -3874,27 +3874,13 @@ void MakeStaticProp() {
 
 
 //-----------------------------------------------------------------------------
-// Purpose: Collapse the entire skeleton into a single center bone named
-//          "prop_root", producing a one-bone *dynamic* model that can still
-//          carry physics collision ($collisionmodel/$collisionjoints), which is
-//          the point of a "simple" prop.
+// Purpose: Collapse the skeleton to one bone, "prop_root", as a *dynamic* model -
+//          like $staticprop but still able to carry physics collision.
 //
-//          Unlike MakeStaticProp(), this does NOT set the static-prop flag and -
-//          critically - does NOT bake geometry into model space or reset the root
-//          bone to identity. The vertices stay in their source space and the root
-//          bone keeps its normal bind-pose transform, exactly like an ordinary
-//          one-bone model. That is what keeps the render mesh aligned with the
-//          $generate collision: ProcessGenerateRequests() runs *after*
-//          SimplifyModel() and re-derives collision from these same source-space
-//          vertices (applying the source->model rotation itself). If we baked the
-//          vertices here, that rotation would be applied twice and the collision
-//          would be visibly rotated off the render mesh.
-//
-//          If the source's root bone is already named "prop_root" that name is
-//          reused; otherwise the root bone is renamed to "prop_root". Everything
-//          keyed to the original skeleton (flex, jigglebones, eyeballs, mouths,
-//          bone flex drivers) is stripped, and attachments/hitboxes are remapped
-//          onto the single bone so exactly "prop_root" survives the collapse.
+//          Unlike MakeStaticProp(), verts are not baked to model space and the root
+//          keeps its bind pose: ProcessGenerateRequests() runs after SimplifyModel()
+//          and re-derives collision from these same source-space verts, applying the
+//          source->model rotation itself. Baking here would apply it twice.
 //-----------------------------------------------------------------------------
 void MakeSimpleProp() {
     int i, j, k;
@@ -9276,6 +9262,14 @@ static void ValidateModelBudget() {
             totalVerts += pLodData->numvertices;
     }
 
+    // Render LODs: the implicit root plus each $lod. A negative switch value
+    // uniquely identifies the $shadowlod, which is excluded.
+    int lodCount = 0;
+    for (int i = 0; i < g_ScriptLODs.Count(); i++) {
+        if (g_ScriptLODs[i].switchValue >= 0.0f)
+            lodCount++;
+    }
+
     // true bone constraints (point / orient / aim / parent). Jigglebones,
     // twistbones and $driverlookat aimat bones are separate procedural-bone
     // types, not constraints, so they are intentionally excluded.
@@ -9288,6 +9282,8 @@ static void ValidateModelBudget() {
     } checks[] = {
         {totalVerts,            g_StudioMdlContext.budgetTotalVerts,      "totalverts"},
         {g_numtextures,         g_StudioMdlContext.budgetMaterials,       "materials"},
+        {numcdtextures,         g_StudioMdlContext.budgetCdMaterials,     "cdmaterials"},
+        {lodCount,              g_StudioMdlContext.budgetLods,            "lod"},
         {g_numflexcontrollers,  g_StudioMdlContext.budgetFlexControllers, "flexcontroller"},
         {g_numflexdesc,         g_StudioMdlContext.budgetFlexMorph,       "flexmorph"},
         {g_numflexrules,        g_StudioMdlContext.budgetFlexRules,       "flexrules"},

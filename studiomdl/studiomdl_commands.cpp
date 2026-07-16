@@ -52,7 +52,7 @@ struct s_rendermesh_def_t {
     bool noAttachments;     // strip the clone's DMX attachment dags post-clone (per-source, cache-safe)
     bool used;
     s_source_t *pOwnedSource;
-    s_source_t *pCollisionSource; // bone+mesh-only owned source for $collisionmodel/$collisionjoints/$generate
+    s_source_t *pCollisionSource; // bone+mesh-only owned source for $collisionmodel/$collisionjoints/$generatemodel
 };
 
 static s_rendermesh_def_t g_rendermeshDefs[MAX_RENDERMESH_DEFS];
@@ -5580,6 +5580,10 @@ void Cmd_ModelBudget() {
             g_StudioMdlContext.maxBoneLimit = ReadBudgetValue(MAXSTUDIOBONES);
         } else if (stricmp("materials", token) == 0) {
             g_StudioMdlContext.budgetMaterials = ReadBudgetValue(MAXSTUDIOSKINS);
+        } else if (stricmp("cdmaterials", token) == 0) {
+            g_StudioMdlContext.budgetCdMaterials = ReadBudgetValue(MAXSTUDIOCDTEXTURES);
+        } else if (stricmp("lod", token) == 0) {
+            g_StudioMdlContext.budgetLods = ReadBudgetValue(MAX_NUM_LODS);
         } else if (stricmp("flexcontroller", token) == 0) {
             g_StudioMdlContext.budgetFlexControllers = ReadBudgetValue(MAXSTUDIOFLEXCTRL);
         } else if (stricmp("flexmorph", token) == 0) {
@@ -7174,14 +7178,14 @@ void CullOrphanFlex()
 }
 
 //-----------------------------------------------------------------------------
-// Purpose: part of -cullmorphs (disable within it via -nocullflexdesc). Remove flexdescs
-//   that nothing references and compact g_flexdesc[], remapping every index that points
-//   into it. The morph/flex culls only shrink the referencing arrays (flexkeys, rules,
-//   controllers); they never renumber the desc space, so orphaned descs would otherwise
-//   still ship in the .mdl. Runs last, after CullUnreferencedFlexes()/CullOrphanFlex(), so
-//   it sees the final surviving set - a desc left dead by either cull is picked up here.
-//   (The engine treats desc indices as MDL-internal - RunFlexRules zeroes a dest[] sized to
-//   numflexdesc and its own FIXME says descs without rules should be stripped here.)
+// Purpose: part of -cullmorphs. Remove flexdescs that nothing references and compact
+//   g_flexdesc[], remapping every index that points into it. The morph/flex culls only shrink
+//   the referencing arrays (flexkeys, rules, controllers); they never renumber the desc space,
+//   so orphaned descs would otherwise still ship in the .mdl. Runs last, after
+//   CullUnreferencedFlexes()/CullOrphanFlex(), so it sees the final surviving set - a desc left
+//   dead by either cull is picked up here. (The engine treats desc indices as MDL-internal -
+//   RunFlexRules zeroes a dest[] sized to numflexdesc and its own FIXME says descs without
+//   rules should be stripped here.)
 //
 //   A desc is live if a surviving flexkey (flexdesc/flexpair), flexrule (output flex or a
 //   FETCH2 input), eyeball, or mouth references it. Slot 0 is always kept so the remap can
@@ -7189,7 +7193,7 @@ void CullOrphanFlex()
 //-----------------------------------------------------------------------------
 void CullOrphanFlexDescs()
 {
-    if ( !g_StudioMdlContext.cullMorphs || g_StudioMdlContext.bNoCullFlexDesc || g_numflexdesc == 0 )
+    if ( !g_StudioMdlContext.cullMorphs || g_numflexdesc == 0 )
         return;
 
     bool descLive[MAXSTUDIOFLEXDESC] = { false };
@@ -7199,10 +7203,9 @@ void CullOrphanFlexDescs()
     MarkDesc( 0 );
 
     // A flexkey keeps its desc alive only if it has backing delta verts - the same gate
-    // CullOrphanFlex() uses. A mesh-filtered $rendermesh clone leaves vert-less flexkeys
-    // (numvanims == 0) whose rules/controllers -cullflex already stripped; those must not
-    // resurrect the desc here. write.cpp only emits a flex for a flexkey with verts, so a
-    // vert-less flexkey never references a written desc. The default flexkey is always kept.
+    // CullOrphanFlex() uses. write.cpp only emits an mstudioflex_t for a flexkey that lands
+    // verts in a mesh, so a vert-less one (e.g. an empty DMX delta state) never references a
+    // written desc and must not resurrect it here. The default flexkey is always kept.
     for ( int i = 0; i < g_numflexkeys; i++ )
     {
         if ( g_flexkey[i].numvanims <= 0 && &g_flexkey[i] != g_defaultflexkey )
@@ -8765,6 +8768,61 @@ static void ApplyRemoveFlexControllerFilter(s_source_t *pSource, s_rendermesh_de
         nRemovedRules, nRemovedRules == 1 ? "" : "s", pSource->filename);
 }
 
+// A mesh/material filter drops the delta verts of the geometry it removed (see the vanim remap
+// in RebuildGeometryFromKeepMask), which leaves flex keys driving nothing. Drop those before
+// AddBodyFlexData registers a flexdesc for each: a filtered clone must look like a DMX that
+// never had the morph. Returns how many were pruned.
+static int PruneDeadFlexKeys(s_source_t *pSource) {
+    const int nKeys = pSource->m_FlexKeys.Count();
+    if (nKeys == 0)
+        return 0;
+
+    CUtlVector<int> keyMap;    // old index -> new index, -1 = dropped
+    keyMap.SetSize(nKeys);
+    int nKept = 0;
+
+    for (int i = 0; i < nKeys; i++) {
+        const s_flexkey_t &key = pSource->m_FlexKeys[i];
+        const s_sourceanim_t *pAnim = FindSourceAnim(pSource, key.animationname);
+
+        // m_FlexKeys only ever holds DMX keys (AddFlexKey takes a CDmeCombinationOperator;
+        // VTA flexes go straight to g_flexkey via Option_Flex), so newStyleVertexAnimations is
+        // always true here. Guard anyway: an old-style frame 0 is the basis rather than a
+        // delta, and RebuildGeometryFromKeepMask leaves old-style numvanims unremapped, so
+        // pruning on it would read a stale count.
+        const bool bDead = pAnim && pAnim->newStyleVertexAnimations
+                           && key.frame >= 0 && key.frame < MAXSTUDIOANIMFRAMES
+                           && pAnim->numvanims[key.frame] == 0;
+
+        keyMap[i] = bDead ? -1 : nKept++;
+    }
+
+    if (nKept == nKeys)
+        return 0;
+
+    CUtlVector<s_flexkey_t> kept;
+    for (int i = 0; i < nKeys; i++) {
+        if (keyMap[i] >= 0)
+            kept.AddToTail(pSource->m_FlexKeys[i]);
+    }
+    pSource->m_FlexKeys.RemoveAll();
+    pSource->m_FlexKeys.AddVectorToTail(kept);
+
+    // m_nFlex is a source-local flex-key index (AddBodyFlexRules reads
+    // g_flexkey[m_nKeyStartIndex + m_nFlex]), so it has to follow the compaction. A rule whose
+    // key is gone drives nothing and goes with it.
+    for (int i = pSource->m_CombinationRules.Count() - 1; i >= 0; i--) {
+        const int nOld = pSource->m_CombinationRules[i].m_nFlex;
+        const int nNew = (nOld >= 0 && nOld < nKeys) ? keyMap[nOld] : -1;
+        if (nNew < 0)
+            pSource->m_CombinationRules.Remove(i);
+        else
+            pSource->m_CombinationRules[i].m_nFlex = nNew;
+    }
+
+    return nKeys - nKept;
+}
+
 // $rendermesh nofacial: strip the clone's flex (see StripSourceFlexData) and report it.
 static void ApplyNoFacialFilter(s_source_t *pSource) {
     int nFlexKeys = StripSourceFlexData(pSource);
@@ -8823,13 +8881,31 @@ static void ApplyRenderMeshFilter(s_source_t *pSource, s_rendermesh_def_t *pDef)
     if (pDef->numRemoveMaterials > 0 || pDef->numRemoveMaterialWords > 0)
         ApplyMaterialRemoveFilter(pSource, pDef);
 
+    // Prune the morphs the geometry filters above just emptied. Skipped under nofacial, which
+    // strips every flex key anyway. When nothing survives, the clone has no facial geometry
+    // left, so fall through to nofacial and drop the rest of the rig with it.
+    bool bNoFacial = pDef->noFacial;
+    if (!bNoFacial) {
+        const bool bHadFlexKeys = pSource->m_FlexKeys.Count() > 0;
+        const int nPruned = PruneDeadFlexKeys(pSource);
+
+        if (nPruned > 0)
+            Msg("$rendermesh '%s': dropped %d morph%s left with no delta verts by the filters in '%s'\n",
+                pDef->name, nPruned, nPruned == 1 ? "" : "s", pSource->filename);
+
+        if (bHadFlexKeys && pSource->m_FlexKeys.Count() == 0) {
+            Msg("$rendermesh '%s': no morphs survived the filters - applying nofacial\n", pDef->name);
+            bNoFacial = true;
+        }
+    }
+
     // Drop individual flex controllers (keeps morphs and the rest of the rig). Skipped when
     // nofacial is set, since that strips everything below anyway.
-    if (pDef->numRemoveFlexControllers > 0 && !pDef->noFacial)
+    if (pDef->numRemoveFlexControllers > 0 && !bNoFacial)
         ApplyRemoveFlexControllerFilter(pSource, pDef);
 
     // Strip facial data (flex controllers/rules/deltas) if requested
-    if (pDef->noFacial)
+    if (bNoFacial)
         ApplyNoFacialFilter(pSource);
 
     // Drop the source's DMX attachments from this clone. Attachments live per-source in
@@ -8942,7 +9018,7 @@ void ReportUnusedRenderMeshDefs() {
 }
 
 // Lazily load, clone, and filter the underlying source for a $rendermesh, caching it in
-// pDef->pOwnedSource. Shared by $body (ProcessOptionStudio) and $generate. The raw source is
+// pDef->pOwnedSource. Shared by $body (ProcessOptionStudio) and $generatemodel. The raw source is
 // cloned immediately so the underlying file is never mutated; returns the shared owned source
 // (do NOT free it).
 static void EnsureRenderMeshOwnedSource(s_rendermesh_def_t *pDef, bool reverse) {
@@ -8969,12 +9045,31 @@ static void EnsureRenderMeshOwnedSource(s_rendermesh_def_t *pDef, bool reverse) 
 }
 
 // Mark a $rendermesh as used without loading its geometry. Called at parse time by
-// consumers (e.g. $generate/$generatejoint) whose actual resolution happens after
+// consumers (e.g. $generatemodel/$generatejoint) whose actual resolution happens after
 // ReportUnusedRenderMeshDefs() runs, so the def isn't falsely flagged as unused.
 void MarkRenderMeshUsed(const char *name) {
     s_rendermesh_def_t *pDef = FindRenderMeshDef(name);
     if (pDef)
         pDef->used = true;
+}
+
+// Load a file as a private bone+mesh-only clone: jigglebones/hitboxes/procedural bones register
+// into model-global state during the parse, so they must be suppressed at load time, not stripped
+// after. Caller filters and strips flex. NULL if the file could not be loaded.
+static s_source_t *LoadCollisionOnlyClone(const char *filename) {
+    // bUseCache=false: don't pick up a normally-loaded copy (with jigglebones etc.), and keep this
+    // owned source independent of any $body one.
+    g_bLoadingRenderMeshRaw = true;
+    g_bRenderMeshSuppressJiggleBones = true;
+    g_bRenderMeshSuppressHitboxes = true;
+    g_bRenderMeshSuppressProceduralBones = true;
+    s_source_t *pRaw = Load_Source(filename, "", false, false, /*bUseCache=*/false);
+    g_bRenderMeshSuppressJiggleBones = false;
+    g_bRenderMeshSuppressHitboxes = false;
+    g_bRenderMeshSuppressProceduralBones = false;
+    g_bLoadingRenderMeshRaw = false;
+
+    return pRaw ? CloneSourceGeometry(pRaw) : nullptr;
 }
 
 // Lazily build a bone+mesh-only owned source for the collision/generate paths, cached in
@@ -8986,28 +9081,16 @@ static void EnsureRenderMeshCollisionSource(s_rendermesh_def_t *pDef) {
     if (pDef->pCollisionSource)
         return;
 
-    // bUseCache=false: don't pick up a normally-loaded copy (with jigglebones etc.), and keep this
-    // owned source independent of the $body one.
-    g_bLoadingRenderMeshRaw = true;
-    g_bRenderMeshSuppressJiggleBones = true;
-    g_bRenderMeshSuppressHitboxes = true;
-    g_bRenderMeshSuppressProceduralBones = true;
-    s_source_t *pRaw = Load_Source(pDef->filename, "", false, false, /*bUseCache=*/false);
-    g_bRenderMeshSuppressJiggleBones = false;
-    g_bRenderMeshSuppressHitboxes = false;
-    g_bRenderMeshSuppressProceduralBones = false;
-    g_bLoadingRenderMeshRaw = false;
-
-    if (!pRaw)
+    s_source_t *pOwned = LoadCollisionOnlyClone(pDef->filename);
+    if (!pOwned)
         return;
 
-    s_source_t *pOwned = CloneSourceGeometry(pRaw);
     ApplyRenderMeshFilter(pOwned, pDef);   // mesh isolate/exclude, removematerial(word)
     StripSourceFlexData(pOwned);           // bone + mesh only
     pDef->pCollisionSource = pOwned;
 }
 
-// Resolve a $rendermesh to a bone+mesh-only clone for $collisionmodel/$collisionjoints/$generate.
+// Resolve a $rendermesh to a bone+mesh-only clone for $collisionmodel/$collisionjoints/$generatemodel.
 // Returns a fresh independent clone each call (callers may mutate it); NULL if not a $rendermesh.
 s_source_t *GetRenderMeshCollisionSource(const char *name) {
     s_rendermesh_def_t *pDef = FindRenderMeshDef(name);
@@ -9017,6 +9100,50 @@ s_source_t *GetRenderMeshCollisionSource(const char *name) {
     EnsureRenderMeshCollisionSource(pDef);
     pDef->used = true;
     return pDef->pCollisionSource ? CloneSourceGeometry(pDef->pCollisionSource) : nullptr;
+}
+
+// Bone+mesh-only sources loaded straight from a file (not via a $rendermesh def), cached by
+// filename so several $generatejoint requests sharing one file parse it once.
+struct s_collision_file_source_t {
+    char filename[MAX_PATH];
+    s_source_t *pSource;
+};
+static CUtlVector<s_collision_file_source_t> g_collisionFileSources;
+
+// Resolve a collision geometry name to a bone+mesh-only clone: a $rendermesh def if one matches
+// that name, otherwise a plain source file (.dmx/.smd/.obj). Either way only bones and mesh are
+// taken - no hitboxes, jigglebones, procedural bones or flex. Returns a fresh independent clone
+// each call (callers may mutate it); NULL if the name is neither a $rendermesh nor a loadable file.
+s_source_t *GetCollisionSourceByName(const char *name) {
+    s_source_t *pClone = GetRenderMeshCollisionSource(name);
+
+    if (!pClone && !FindRenderMeshDef(name)) {  // not a $rendermesh (a failed one must not retry as a file)
+        s_source_t *pCached = nullptr;
+        for (int i = 0; i < g_collisionFileSources.Count(); i++)
+            if (!Q_stricmp(g_collisionFileSources[i].filename, name))
+                pCached = g_collisionFileSources[i].pSource;
+
+        if (!pCached) {
+            pCached = LoadCollisionOnlyClone(name);
+            if (!pCached)
+                return nullptr;
+            StripSourceFlexData(pCached);
+            int idx = g_collisionFileSources.AddToTail();
+            Q_strncpy(g_collisionFileSources[idx].filename, name,
+                      sizeof(g_collisionFileSources[idx].filename));
+            g_collisionFileSources[idx].pSource = pCached;
+        }
+        pClone = CloneSourceGeometry(pCached);
+    }
+
+    if (pClone) {
+        // These come only from the globals at load time, never from the file, so re-copying them
+        // makes a cached hit behave like the fresh Load_Source this call replaced - otherwise a
+        // source cached before an $origin would silently keep the old one.
+        VectorCopy(g_defaultadjust, pClone->adjust);
+        pClone->rotation = g_defaultrotation;
+    }
+    return pClone;
 }
 
 
